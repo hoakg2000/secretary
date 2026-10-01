@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Luyện Phát Âm Tiếng Nhật - Fish Audio TTS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800 pb-12">
+
+  <!-- Header -->
+  <header class="bg-indigo-600 text-white shadow-md mb-8">
+    <div class="max-w-4xl mx-auto px-4 py-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <i class="fa-solid fa-volume-high text-2xl"></i>
+        <h1 class="text-xl font-bold">Japanese TTS Player</h1>
+      </div>
+      <span class="text-xs bg-indigo-500 px-3 py-1 rounded-full text-indigo-100">Proxy Mode</span>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-4 space-y-6">
+
+    <!-- Trình phát âm thanh chính -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+      <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
+        <i class="fa-solid fa-keyboard text-indigo-500"></i> Nhập văn bản tiếng Nhật
+      </h2>
+
+      <div class="space-y-4">
+        <div>
+          <textarea 
+            id="jpInput" 
+            rows="3" 
+            placeholder="Nhập tiếng Nhật ở đây... (ví dụ: こんにちは、お元気ですか？)"
+            class="w-full p-3.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-lg resize-y"
+          >こんにちは、はじめまして。</textarea>
+        </div>
+
+        <!-- Tùy chỉnh Tốc độ -->
+        <div class="flex flex-wrap items-center justify-between gap-4 bg-slate-50 p-3 rounded-lg border border-slate-100">
+          <div class="flex items-center gap-3 w-full sm:w-auto">
+            <label class="text-sm font-medium text-slate-600 whitespace-nowrap">Tốc độ đọc:</label>
+            <input 
+              type="range" 
+              id="speedRange" 
+              min="0.5" 
+              max="1.5" 
+              step="0.1" 
+              value="1.0" 
+              class="w-32 accent-indigo-600 cursor-pointer"
+              oninput="document.getElementById('speedValue').innerText = this.value + 'x'"
+            >
+            <span id="speedValue" class="text-sm font-semibold text-indigo-600 w-10">1.0x</span>
+          </div>
+
+          <button 
+            id="speakBtn" 
+            onclick="speakCustomText()" 
+            class="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-6 py-2.5 rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm"
+          >
+            <i class="fa-solid fa-play"></i> Phát Âm Thanh
+          </button>
+        </div>
+
+        <!-- Player Audio & Trạng thái -->
+        <div id="statusContainer" class="hidden">
+          <div id="loadingState" class="flex items-center gap-2 text-indigo-600 font-medium py-2">
+            <i class="fa-solid fa-circle-notch fa-spin"></i> Đang tải dữ liệu từ Fish Audio...
+          </div>
+          <audio id="audioPlayer" controls class="w-full mt-2 hidden"></audio>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mẫu câu giao tiếp cơ bản -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+      <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
+        <i class="fa-solid fa-book text-indigo-500"></i> Một số câu tiếng Nhật cơ bản
+      </h2>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="phraseList">
+        <!-- Javascript sẽ sinh các card mẫu ở đây -->
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // Danh sách câu giao tiếp cơ bản
+    const phrases = [
+      { jp: "こんにちは", romaji: "Konnichiwa", vi: "Xin chào (ban ngày)" },
+      { jp: "おはようございます", romaji: "Ohayou gozaimasu", vi: "Xin chào buổi sáng" },
+      { jp: "こんばんは", romaji: "Konbanwa", vi: "Xin chào buổi tối" },
+      { jp: "ありがとうございます", romaji: "Arigatou gozaimasu", vi: "Cảm ơn rất nhiều" },
+      { jp: "すみません", romaji: "Sumimasen", vi: "Xin lỗi / Cho tôi hỏi" },
+      { jp: "お元気ですか？", romaji: "Ogenki desu ka?", vi: "Bạn có khỏe không?" },
+      { jp: "はい、元気です", romaji: "Hai, genki desu", vi: "Vâng, tôi khỏe" },
+      { jp: "さようなら", romaji: "Sayounara", vi: "Tạm biệt" },
+      { jp: "よろしくお願いいたします", romaji: "Yoroshiku onegai shimasu", vi: "Rất mong nhận được sự giúp đỡ" }
+    ];
+
+    // Render danh sách câu mẫu
+    const phraseContainer = document.getElementById('phraseList');
+    phrases.forEach(item => {
+      const card = document.createElement('div');
+      card.className = "p-4 border border-slate-200 rounded-lg hover:border-indigo-300 hover:shadow-sm transition-all flex justify-between items-center bg-slate-50/50";
+      card.innerHTML = `
+        <div>
+          <div class="text-lg font-bold text-slate-800">${item.jp}</div>
+          <div class="text-xs text-indigo-600 font-medium">${item.romaji}</div>
+          <div class="text-xs text-slate-500 mt-1">${item.vi}</div>
+        </div>
+        <button 
+          onclick="speakText('${item.jp}')" 
+          class="p-2.5 text-indigo-600 hover:bg-indigo-100 rounded-full transition-colors flex-shrink-0"
+          title="Phát âm"
+        >
+          <i class="fa-solid fa-volume-high text-lg"></i>
+        </button>
+      `;
+      phraseContainer.appendChild(card);
+    });
+
+    // Hàm gọi API Node.js server
+    async function requestTTS(text) {
+      const speed = document.getElementById('speedRange').value;
+      const statusContainer = document.getElementById('statusContainer');
+      const loadingState = document.getElementById('loadingState');
+      const audioPlayer = document.getElementById('audioPlayer');
+      const speakBtn = document.getElementById('speakBtn');
+
+      statusContainer.classList.remove('hidden');
+      loadingState.classList.remove('hidden');
+      audioPlayer.classList.add('hidden');
+      speakBtn.disabled = true;
+      speakBtn.classList.add('opacity-50');
+
+      try {
+        const response = await fetch('http://localhost:3000/api/tts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ text, speed: parseFloat(speed) })
+        });
+
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || 'Lỗi khi gọi server.');
+        }
+
+        // Nhận dữ liệu mp3 dưới dạng Blob
+        const blob = await response.blob();
+        const audioUrl = URL.createObjectURL(blob);
+
+        audioPlayer.src = audioUrl;
+        audioPlayer.classList.remove('hidden');
+        audioPlayer.play();
+
+      } catch (err) {
+        alert('Lỗi: ' + err.message);
+      } finally {
+        loadingState.classList.add('hidden');
+        speakBtn.disabled = false;
+        speakBtn.classList.remove('opacity-50');
+      }
+    }
+
+    function speakCustomText() {
+      const text = document.getElementById('jpInput').value;
+      if (!text.trim()) {
+        alert('Vui lòng nhập văn bản tiếng Nhật!');
+        return;
+      }
+      requestTTS(text);
+    }
+
+    function speakText(text) {
+      document.getElementById('jpInput').value = text;
+      requestTTS(text);
+    }
+  </script>
+</body>
+</html>
