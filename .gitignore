@@ -1,0 +1,80 @@
+# ==========================================
+# Dependencies
+# ==========================================
+node_modules/
+.pnpm-store/
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# ==========================================
+# Next.js (Frontend)
+# ==========================================
+.next/
+out/
+build/
+dist/
+
+# Next.js Bundle Analyzer / Telemetry
+.next/trace
+*.log
+
+# ==========================================
+# NestJS (Backend)
+# ==========================================
+dist/
+coverage/
+.clinic/
+*.tsbuildinfo
+
+# NestJS / Prisma / ORM generated files (nếu có)
+# prisma/migrations/ # Thường nên KEEP migrations, mở comment nếu muốn bỏ tạm
+*.db
+*.sqlite
+
+# ==========================================
+# Environment & Local Secrets
+# ==========================================
+.env
+.env*.local
+.env.production
+!.env.example
+
+# ==========================================
+# Logs & Debugging
+# ==========================================
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ==========================================
+# IDEs & System Files
+# ==========================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# VS Code & JetBrains
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
