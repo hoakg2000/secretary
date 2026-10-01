@@ -8,9 +8,9 @@ A multi-platform smart personal assistant system deeply integrated with the Goog
 
 ### 1.2. Document summary
 
-- **Backend:** NestJS (Typescript, REST API, Authentication, Background Jobs/Queue).
-- **Frontend (Web):** Next.js (Typescript, App Router, Vercel AI SDK).
-- **Mobile (Android):** React Native (Typescript).
+- **Server** NestJS (Typescript, REST API, Authentication, Background Jobs/Queue).
+- **Web-client:** Next.js (Typescript, App Router, Vercel AI SDK).
+- **Mobile-client:** Android - React Native (Typescript).
 - **Database (RDBMS):** MySQL + Prisma ORM (User, Chat History, Settings, Raw Emails, Events).
 - **Vector Database:** pgvector or Qdrant (Store & retrieve Knowledge Base, Semantic Memory via Embeddings).
 - **AI Engine:** Gemini AI API (Rules, Natural Language Processing, Function Calling, Memory Extraction, Context management).
