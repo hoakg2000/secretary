@@ -79,7 +79,29 @@
 
 ---
 
-### 4. Delete Character
+### 4. Activate Character
+
+- **Endpoint**: `PATCH /api/v1/characters/:id/activate`
+- **Guard / Auth**: `AuthGuard('jwt')`
+- **Description**: Activates a specific AI character as the primary active character and automatically deactivates all other characters (setting `isActive = false`).
+
+#### Data Transfer Objects (DTO)
+
+- **Request DTO**: `ActivateCharacterParamsDto`
+  - `id` (`string`, path param, required): Character UUID to activate.
+
+- **Response DTO**: `CharacterResponseDto`
+  - `id` (`string`): Character UUID.
+  - `name` (`string`): Character name.
+  - `voiceId` (`string`): Voice ID.
+  - `source` (`string`): Character origin.
+  - `isActive` (`boolean`): Active status (`true`).
+  - `createdAt` (`string`): ISO timestamp.
+  - `updatedAt` (`string`): ISO timestamp.
+
+---
+
+### 5. Delete Character
 
 - **Endpoint**: `DELETE /api/v1/characters/:id`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -96,7 +118,7 @@
 
 ---
 
-### 5. Get Personas for Character
+### 6. Get Personas for Character
 
 - **Endpoint**: `GET /api/v1/characters/:id/personas`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -117,7 +139,7 @@
 
 ---
 
-### 6. Add Persona to Character
+### 7. Add Persona to Character
 
 - **Endpoint**: `POST /api/v1/characters/:id/personas`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -140,7 +162,7 @@
 
 ---
 
-### 7. Update Persona
+### 8. Update Persona
 
 - **Endpoint**: `PUT /api/v1/characters/:id/personas/:personaId`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -164,7 +186,7 @@
 
 ---
 
-### 8. Delete Persona
+### 9. Delete Persona
 
 - **Endpoint**: `DELETE /api/v1/characters/:id/personas/:personaId`
 - **Guard / Auth**: `AuthGuard('jwt')`

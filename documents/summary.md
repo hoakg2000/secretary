@@ -15,6 +15,7 @@ The system is a **Personalized AI Assistant**, customized according to user sett
 #### A. Google Ecosystem Integration (Email & Calendar)
 
 - **Integration Method:** Google OAuth2 with automatic Token Refresh mechanism & Google Pub/Sub Webhooks for real-time email ingestion.
+- **Google OAuth Scopes:** Scopes covering both Gmail API (`https://mail.google.com/`) and Google Calendar API (`https://www.googleapis.com/auth/calendar`).
 - **Email Flow:** Automatic ingestion of forwarded emails from multiple secondary addresses into the primary inbox.
 - **Pre-filtering & Async Processing Pipeline:**
   - **Architecture:** State Machine + Redis Queue (BullMQ in NestJS).

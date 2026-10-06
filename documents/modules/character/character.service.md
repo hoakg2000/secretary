@@ -60,7 +60,24 @@
 
 ---
 
-### 4. deleteCharacter
+### 4. activateCharacter
+
+- **Task Description**: Activates the specified character by setting its `is_active = true` in `characters`, and atomically sets all other character records to `is_active = false` within the same database transaction to guarantee only one character can be active at a time.
+- **Accessed Tables**: `characters` (Read, Write)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**:
+  - `id` (`string`): Character UUID to activate.
+
+- **Output**:
+  - `Promise<CharacterResponseDto>`: The newly activated character entity with `isActive = true`.
+
+---
+
+### 5. deleteCharacter
 
 - **Task Description**: Permanently deletes an AI character and cascades deletion to all associated persona configurations in `personas`.
 - **Accessed Tables**: `characters` (Delete), `personas` (Delete)
@@ -77,7 +94,7 @@
 
 ---
 
-### 5. getPersonasByCharacterId
+### 6. getPersonasByCharacterId
 
 - **Task Description**: Fetches all persona attribute configurations (Prompt, Tone, Identity, Knowledge Background, Relationship Dynamics, Other) assigned to a given character from `personas`.
 - **Accessed Tables**: `characters` (Read), `personas` (Read)
@@ -94,7 +111,7 @@
 
 ---
 
-### 6. addPersona
+### 7. addPersona
 
 - **Task Description**: Validates character existence and adds a new persona attribute configuration (`type` + `value`) to the target character in `personas`.
 - **Accessed Tables**: `characters` (Read), `personas` (Write)
@@ -112,7 +129,7 @@
 
 ---
 
-### 7. updatePersona
+### 8. updatePersona
 
 - **Task Description**: Validates character ownership and updates an existing persona attribute's type or value in `personas`.
 - **Accessed Tables**: `personas` (Read, Write)
@@ -131,7 +148,7 @@
 
 ---
 
-### 8. deletePersona
+### 9. deletePersona
 
 - **Task Description**: Validates character ownership and deletes the specific persona attribute configuration from `personas`.
 - **Accessed Tables**: `personas` (Delete)

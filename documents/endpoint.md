@@ -10,12 +10,15 @@ Purpose: Single-User Authentication, Session Management, Character and Persona a
 - **`POST /api/v1/auth/refresh`**: Issue new Access Token from Refresh Token.
 - **`POST /api/v1/auth/logout`**: Terminate the login session in `user_sessions`.
 - **`GET /api/v1/auth/session`**: Retrieve active session information.
+- **`GET /api/v1/auth/google/connect`**: Returns Google OAuth2 setup URL with Gmail API (`https://mail.google.com/`) and Calendar API (`https://www.googleapis.com/auth/calendar`) scopes.
+- **`GET /api/v1/auth/google/callback`**: Receives OAuth Callback code, exchanges for access & refresh tokens, and saves encrypted tokens in `users`.
 
 #### B. Character & Persona Management
 
 - **`GET /api/v1/characters`**: Get the list of all AI characters.
 - **`POST /api/v1/characters`**: Create a new AI character (inputs Name, Voice ID, Source).
 - **`PUT /api/v1/characters/:id`**: Update character information (Name, Voice ID, Source, Active status).
+- **`PATCH /api/v1/characters/:id/activate`**: Activate a specific character and set all other characters to `isActive = false`.
 - **`DELETE /api/v1/characters/:id`**: Delete a character.
 - **`GET /api/v1/characters/:id/personas`**: Get all Persona configurations (Prompt, Tone, Identity...) for a specific character.
 - **`POST /api/v1/characters/:id/personas`**: Add a new Persona attribute configuration for a character (`type` + `value`).
@@ -24,13 +27,11 @@ Purpose: Single-User Authentication, Session Management, Character and Persona a
 
 ### 2. Email Module (`docs/backend/email-module/`)
 
-Purpose: Google OAuth, Webhook Ingestion, and Centralized Email Rules Management (`email_rules`).
+Purpose: Webhook Ingestion with token authorization, and Centralized Email Rules Management (`email_rules`).
 
-#### A. Ingestion & OAuth
+#### A. Ingestion & Webhooks
 
-- **`GET /api/v1/email/google/connect`**: Returns Google OAuth2 setup URL for the main inbox.
-- **`GET /api/v1/email/google/callback`**: Receives OAuth Callback code and saves Encrypted Token.
-- **`POST /api/v1/email/webhooks/google-pubsub`**: Ingestion Webhook receiving PUSH notifications for new emails from Google Pub/Sub.
+- **`POST /api/v1/email/webhooks/google-pubsub`**: Ingestion Webhook receiving PUSH notifications from Google Pub/Sub with Authorization Header/Token validation.
 - **`GET /api/v1/email/logs`**: Retrieve the list of ingested emails.
 - **`POST /api/v1/email/logs/:id/reprocess`**: Push email to BullMQ for re-analysis by AI.
 
@@ -43,14 +44,18 @@ Purpose: Google OAuth, Webhook Ingestion, and Centralized Email Rules Management
 
 ### 3. Finance & Calendar Proxy Module (`docs/backend/finance-module/`)
 
-Purpose: Balance management, transaction updates/edits, overall financial reports, and calendar sync.
+Purpose: Balance management, transaction updates/edits, categories management, overall financial reports, and calendar sync.
 
-#### A. Finance & Accounts
+#### A. Finance, Accounts & Categories
 
 - **`GET /api/v1/finance/accounts`**: Get list of bank accounts/e-wallets along with balances and total aggregate balance (**Total Account**).
 - **`POST /api/v1/finance/accounts`**: Add new bank account / e-wallet.
 - **`PUT /api/v1/finance/accounts/:id`**: Edit account name, bank code, currency type.
 - **`PATCH /api/v1/finance/accounts/:id/balance`**: Directly adjust base balance (Manual Balance Adjustment).
+- **`GET /api/v1/finance/categories`**: Get list of income and expense categories (filterable by `type`).
+- **`POST /api/v1/finance/categories`**: Create a new income/expense category.
+- **`PUT /api/v1/finance/categories/:id`**: Edit category information (Name, Type, Icon, Budget Limit).
+- **`DELETE /api/v1/finance/categories/:id`**: Delete a category.
 - **`GET /api/v1/finance/transactions`**: Get income/expense transaction history (Paginated, Filter by time, account type, category).
 - **`POST /api/v1/finance/transactions`**: Add a manual transaction (Automatically updates available balance atomically).
 - **`PUT /api/v1/finance/transactions/:id`**: Edit transaction details (Amount, note, category, time) and calculate automatic balance adjustment.

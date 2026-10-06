@@ -1,6 +1,6 @@
 # Finance Service
 
-- **General Description**: Service responsible for managing bank accounts, processing income/expense transactions with atomic balance updates/reversals, maintaining transactional integrity, generating financial summaries, and integrating AI Tools for financial querying.
+- **General Description**: Service responsible for managing bank accounts, income/expense categories, processing income/expense transactions with atomic balance updates/reversals, maintaining transactional integrity, generating financial summaries, and integrating AI Tools for financial querying.
 - **Accessed Database Tables**:
   - `bank_accounts`
   - `transactions`
@@ -175,3 +175,73 @@
 
 - **Output**:
   - `Promise<FinanceSummaryResponseDto>`: Overview summary report containing totals, category breakdowns, and chart data points.
+
+---
+
+### 10. getCategories
+
+- **Task Description**: Queries all income and expense categories from `categories` table with optional filtering by category type (`INCOME`/`EXPENSE`).
+- **Accessed Tables**: `categories` (Read)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**:
+  - `query` (`GetCategoriesQueryDto`, optional): Filter options by category type.
+
+- **Output**:
+  - `Promise<CategoryResponseDto[]>`: Array of category entity representations.
+
+---
+
+### 11. createCategory
+
+- **Task Description**: Validates inputs and inserts a new financial category into `categories` table.
+- **Accessed Tables**: `categories` (Write)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**:
+  - `dto` (`CreateCategoryDto`): Data transfer object containing category `name`, `type` (`INCOME`/`EXPENSE`), optional `icon`, and optional `budgetLimit`.
+
+- **Output**:
+  - `Promise<CategoryResponseDto>`: Newly created category entity.
+
+---
+
+### 12. updateCategory
+
+- **Task Description**: Verifies category existence by ID, updates category fields (`name`, `type`, `icon`, `budgetLimit`), and persists modifications to `categories` table.
+- **Accessed Tables**: `categories` (Read, Write)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**:
+  - `id` (`string`): Target category UUID.
+  - `dto` (`UpdateCategoryDto`): DTO containing updated category attributes.
+
+- **Output**:
+  - `Promise<CategoryResponseDto>`: Updated category entity.
+
+---
+
+### 13. deleteCategory
+
+- **Task Description**: Verifies category existence, checks that no active transactions reference this category (or disassociates records to preserve integrity), and deletes the record from `categories`.
+- **Accessed Tables**: `categories` (Read, Delete), `transactions` (Read)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**:
+  - `id` (`string`): Target category UUID to delete.
+
+- **Output**:
+  - `Promise<DeleteCategoryResponseDto>`: Deletion success confirmation status.
+

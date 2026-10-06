@@ -1,7 +1,7 @@
 # Authentication & Session Controller
 
 - **Base Endpoint**: `/api/v1/auth`
-- **General Description**: Handles Master User authentication, token issuance and refresh, session termination, and active session retrieval.
+- **General Description**: Handles Master User authentication, token issuance and refresh, session termination, active session retrieval, and Google OAuth2 integration (connect & callback for Gmail and Calendar APIs).
 
 ---
 
@@ -83,3 +83,37 @@
   - `userAgent` (`string`): Browser or client user-agent string.
   - `lastActiveAt` (`string`): ISO 8601 timestamp of last activity.
   - `createdAt` (`string`): ISO 8601 timestamp of session creation.
+
+---
+
+### 5. Connect Google Account
+
+- **Endpoint**: `GET /api/v1/auth/google/connect`
+- **Guard / Auth**: `AuthGuard('jwt')`
+- **Description**: Generates and returns the Google OAuth2 consent screen setup URL for authenticating the Google account with full scopes for both Gmail API (`https://mail.google.com/`) and Google Calendar API (`https://www.googleapis.com/auth/calendar`).
+
+#### Data Transfer Objects (DTO)
+
+- **Request DTO**: None
+
+- **Response DTO**: `ConnectGoogleResponseDto`
+  - `url` (`string`): Google OAuth2 consent URL.
+
+---
+
+### 6. Handle Google OAuth Callback
+
+- **Endpoint**: `GET /api/v1/auth/google/callback`
+- **Guard / Auth**: None
+- **Description**: Handles callback from Google OAuth2 server with Authorization Code, exchanges it for access & refresh tokens covering both Gmail and Google Calendar APIs, encrypts the tokens, and updates user profile settings in `users`.
+
+#### Data Transfer Objects (DTO)
+
+- **Request DTO**: `GoogleOAuthCallbackQueryDto`
+  - `code` (`string`, required): OAuth authorization code returned by Google.
+  - `state` (`string`, optional): Security state token.
+
+- **Response DTO**: `GoogleOAuthCallbackResponseDto`
+  - `success` (`boolean`): OAuth linkage success status.
+  - `message` (`string`): Outcome description message.
+

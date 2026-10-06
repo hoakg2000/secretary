@@ -109,3 +109,26 @@
 
 - **Output**:
   - `Promise<CalendarSyncResponseDto>`: Sync metrics including count of synchronized events, conflicts detected, and completion timestamp.
+
+---
+
+### 6. handleCalendarAutoSyncCron
+
+- **Task Description**: Scheduled background Cron Job that runs automatically at a fixed interval to perform silent bi-directional calendar synchronization without requiring any manual trigger. Internally calls `syncGoogleCalendar()` logic to:
+  1. Identify all `DIRTY` local events and push changes to Google Calendar API.
+  2. Pull any remote updates from Google Calendar that occurred since `last_synced_at`.
+  3. Detect and flag `CONFLICT` records where both local and remote changes exist simultaneously.
+  4. Logs sync outcomes (count of synced events, conflicts, errors) to application telemetry.
+  5. On repeated failures (e.g., Google Calendar API unavailability), backs off gracefully and logs the failure without throwing — ensuring the cron does not crash the NestJS process.
+- **Cron Schedule**: Configurable via `CALENDAR_AUTO_SYNC_CRON` env var (default: `*/15 * * * *` — every 15 minutes).
+- **Accessed Tables**: `local_calendars` (Read, Write), `calendar_sync_states` (Read, Write)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**: None (Triggered automatically by NestJS `@Cron()` scheduler)
+
+- **Output**:
+  - `Promise<void>`: Resolves silently after sync completes or fails gracefully. Sync results are emitted via application logger only.
+

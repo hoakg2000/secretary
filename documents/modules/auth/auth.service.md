@@ -1,6 +1,6 @@
 # Authentication & Session Service
 
-- **General Description**: Manages core business logic for user authentication, session lifecycle, JWT issuance, token rotation, and credential verification.
+- **General Description**: Manages core business logic for user authentication, session lifecycle, JWT issuance, token rotation, credential verification, and Google OAuth2 integration for Gmail and Calendar APIs.
 - **Accessed Database Tables**:
   - `users`
   - `user_sessions`
@@ -78,3 +78,37 @@
 
 - **Output**:
   - `Promise<SessionInfoResponseDto>`: Active session metadata and associated user information.
+
+---
+
+### 5. getGoogleConnectUrl
+
+- **Task Description**: Generates Google OAuth2 consent URL containing requested scopes for both Gmail API (`https://mail.google.com/`) and Google Calendar API (`https://www.googleapis.com/auth/calendar`).
+- **Accessed Tables**: No DB access
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**: None
+
+- **Output**:
+  - `Promise<string>`: Generated Google OAuth redirect authorization URL.
+
+---
+
+### 6. handleGoogleCallback
+
+- **Task Description**: Receives authorization code from Google OAuth callback, exchanges it for token pair with Gmail and Calendar scopes, encrypts refresh and access tokens, and updates encrypted tokens in `users` table.
+- **Accessed Tables**: `users` (Read, Write)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**:
+  - `code` (`string`): OAuth authorization code returned by Google callback.
+
+- **Output**:
+  - `Promise<{ success: boolean; message: string }>`: Outcome status object of OAuth connection process.
+

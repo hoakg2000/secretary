@@ -1,7 +1,7 @@
 # Finance Controller
 
 - **Base Endpoint**: `/api/v1/finance`
-- **General Description**: Controller handling financial management operations including bank accounts and e-wallets listing, creation, modification, balance adjustment, income/expense transactions management, and financial summary report retrieval.
+- **General Description**: Controller handling financial management operations including bank accounts and e-wallets listing, creation, modification, balance adjustment, income/expense categories management, income/expense transactions management, and financial summary report retrieval.
 
 ---
 
@@ -241,3 +241,93 @@
     - `label` (`string`): Time label (e.g., date, week number, or month).
     - `income` (`number`): Income amount in the time slice.
     - `expenses` (`number`): Expenses amount in the time slice.
+
+---
+
+### 10. Get Categories List
+
+- **Endpoint**: `GET /api/v1/finance/categories`
+- **Guard / Auth**: `AuthGuard('jwt')`
+- **Description**: Retrieves all income and expense categories from `categories`, with an optional filter by transaction category type (`INCOME` or `EXPENSE`).
+
+#### Data Transfer Objects (DTO)
+
+- **Request DTO**: `GetCategoriesQueryDto`
+  - `type` (`string`, optional, enum: `['INCOME', 'EXPENSE']`): Filter categories by type.
+
+- **Response DTO**: `CategoryResponseDto[]`
+  - `id` (`string`): Category UUID.
+  - `name` (`string`): Category display name.
+  - `type` (`string`, enum: `['INCOME', 'EXPENSE']`): Category type.
+  - `icon` (`string`): Icon identifier/URL for UI presentation.
+  - `budgetLimit` (`number`, optional): Budget spending limit threshold for this category.
+  - `createdAt` (`string`): ISO 8601 timestamp of creation.
+  - `updatedAt` (`string`): ISO 8601 timestamp of last update.
+
+---
+
+### 11. Create Financial Category
+
+- **Endpoint**: `POST /api/v1/finance/categories`
+- **Guard / Auth**: `AuthGuard('jwt')`
+- **Description**: Creates a new financial income or expense category in `categories`.
+
+#### Data Transfer Objects (DTO)
+
+- **Request DTO**: `CreateCategoryDto`
+  - `name` (`string`, required): Name of category.
+  - `type` (`string`, required, enum: `['INCOME', 'EXPENSE']`): Category type.
+  - `icon` (`string`, optional): Icon identifier.
+  - `budgetLimit` (`number`, optional): Budget spending limit for expense categories.
+
+- **Response DTO**: `CategoryResponseDto`
+  - `id` (`string`): Created category UUID.
+  - `name` (`string`): Category name.
+  - `type` (`string`): Category type.
+  - `icon` (`string`): Category icon.
+  - `budgetLimit` (`number`): Budget limit value.
+  - `createdAt` (`string`): ISO timestamp.
+  - `updatedAt` (`string`): ISO timestamp.
+
+---
+
+### 12. Update Financial Category
+
+- **Endpoint**: `PUT /api/v1/finance/categories/:id`
+- **Guard / Auth**: `AuthGuard('jwt')`
+- **Description**: Modifies an existing category's name, type, icon, or budget limit in `categories`.
+
+#### Data Transfer Objects (DTO)
+
+- **Request DTO**: `UpdateCategoryDto`
+  - `id` (`string`, path param, required): Category UUID.
+  - `name` (`string`, optional): Updated category name.
+  - `type` (`string`, optional, enum: `['INCOME', 'EXPENSE']`): Updated category type.
+  - `icon` (`string`, optional): Updated icon.
+  - `budgetLimit` (`number`, optional): Updated budget limit.
+
+- **Response DTO**: `CategoryResponseDto`
+  - `id` (`string`): Updated category UUID.
+  - `name` (`string`): Category name.
+  - `type` (`string`): Category type.
+  - `icon` (`string`): Category icon.
+  - `budgetLimit` (`number`): Budget limit.
+  - `updatedAt` (`string`): ISO timestamp.
+
+---
+
+### 13. Delete Financial Category
+
+- **Endpoint**: `DELETE /api/v1/finance/categories/:id`
+- **Guard / Auth**: `AuthGuard('jwt')`
+- **Description**: Deletes an existing category from `categories` by ID. Prevents deletion or dissociates linked transactions to maintain database referential integrity.
+
+#### Data Transfer Objects (DTO)
+
+- **Request DTO**: `DeleteCategoryParamsDto`
+  - `id` (`string`, path param, required): Category UUID to delete.
+
+- **Response DTO**: `DeleteCategoryResponseDto`
+  - `success` (`boolean`): Operation success status.
+  - `id` (`string`): ID of deleted category.
+

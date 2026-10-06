@@ -1,50 +1,18 @@
 # Email Module Controller
 
 - **Base Endpoint**: `/api/v1/email`
-- **General Description**: Handles Google OAuth connect & callback for main inbox, Pub/Sub webhook ingestion, email logs management, email reprocessing, and CRUD operations for email filtering rules (`email_rules`).
+- **General Description**: Handles Pub/Sub webhook ingestion with token authorization, email logs management, email reprocessing, and CRUD operations for email filtering rules (`email_rules`).
 
 ---
 
 ## List of Endpoints
 
-### 1. Connect Google Account
-
-- **Endpoint**: `GET /api/v1/email/google/connect`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Generates and returns the Google OAuth2 consent screen setup URL for authenticating the main inbox.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `None`
-
-- **Response DTO**: `ConnectGoogleResponseDto`
-  - `url` (`string`): Google OAuth2 consent URL.
-
----
-
-### 2. Handle Google OAuth Callback
-
-- **Endpoint**: `GET /api/v1/email/google/callback`
-- **Guard / Auth**: `None`
-- **Description**: Handles callback from Google OAuth2 server with Authorization Code, exchanges it for access & refresh tokens, encrypts the tokens, and updates user profile settings.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `GoogleOAuthCallbackQueryDto`
-  - `code` (`string`, required): OAuth authorization code returned by Google.
-  - `state` (`string`, optional): Security state token.
-
-- **Response DTO**: `GoogleOAuthCallbackResponseDto`
-  - `success` (`boolean`): OAuth linkage success status.
-  - `message` (`string`): Outcome description message.
-
----
-
-### 3. Handle Google Pub/Sub Webhook
+### 1. Handle Google Pub/Sub Webhook
 
 - **Endpoint**: `POST /api/v1/email/webhooks/google-pubsub`
-- **Guard / Auth**: `None`
-- **Description**: Webhook endpoint triggered by Google Pub/Sub PUSH notifications when a new email arrives in the primary connected inbox. The service fetches raw email content from Gmail API, computes a deduplication hash (`SHA-256` of `Message-ID` + Raw Body) to enforce idempotency, evaluates pre-filtering rules in `email_rules` (`blacklist`, `moneylist`, `whitelist`), persists the record into `email_logs`, and asynchronously enqueues the job to BullMQ (`queue_jobs`) for worker processing:
+- **Guard / Auth**: `PubSubAuthGuard` (Validates `Authorization: Bearer <token>` / Webhook verification secret configured in Google Cloud Pub/Sub push subscription)
+- **Description**: Webhook endpoint triggered by Google Pub/Sub PUSH notifications when a new email arrives in the primary connected inbox. Enforces Authorization token validation to ensure authenticity from Google Cloud. The service fetches raw email content from Gmail API, computes a deduplication hash (`SHA-256` of `Message-ID` + Raw Body) to enforce idempotency, evaluates pre-filtering rules in `email_rules` (`blacklist`, `moneylist`, `whitelist`), persists the record into `email_logs`, and asynchronously enqueues the job to BullMQ (`queue_jobs`) for worker processing:
+  - **Authorization Verification**: Validates the Bearer token in the `Authorization` header against the system's Pub/Sub secret. Returns 401 Unauthorized if invalid or missing.
   - **Deduplication Check**: If the hash already exists in `email_logs`, immediately returns ACK and skips processing to prevent duplicate financial or calendar entries.
   - **Blacklist**: Email is marked as `SKIPPED` in `email_logs` and completely bypasses the AI pipeline.
   - **MoneyList**: Routed with high priority to BullMQ accompanied by a specialized Banking Fluctuation prompt payload.
@@ -56,13 +24,14 @@
 - **Request DTO**: `GooglePubSubWebhookDto`
   - `message` (`object`, required): Google Pub/Sub message object containing base64 data payload, messageId, and publishTime.
   - `subscription` (`string`, required): Google Pub/Sub subscription resource string.
+  - `authorization` (`string`, header, required): Bearer token / Shared secret for webhook verification.
 
 - **Response DTO**: `WebhookAckResponseDto`
   - `success` (`boolean`): Acknowledgement status for Pub/Sub processor.
 
 ---
 
-### 4. Get Email Ingestion Logs
+### 2. Get Email Ingestion Logs
 
 - **Endpoint**: `GET /api/v1/email/logs`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -91,7 +60,7 @@
 
 ---
 
-### 5. Reprocess Email Log
+### 3. Reprocess Email Log
 
 - **Endpoint**: `POST /api/v1/email/logs/:id/reprocess`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -108,7 +77,7 @@
 
 ---
 
-### 6. Get Email Rules List
+### 4. Get Email Rules List
 
 - **Endpoint**: `GET /api/v1/email/rules`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -124,7 +93,7 @@
 
 ---
 
-### 7. Create Email Filtering Rule
+### 5. Create Email Filtering Rule
 
 - **Endpoint**: `POST /api/v1/email/rules`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -150,7 +119,7 @@
 
 ---
 
-### 8. Update Email Filtering Rule
+### 6. Update Email Filtering Rule
 
 - **Endpoint**: `PUT /api/v1/email/rules/:id`
 - **Guard / Auth**: `AuthGuard('jwt')`
@@ -177,7 +146,7 @@
 
 ---
 
-### 9. Delete Email Filtering Rule
+### 7. Delete Email Filtering Rule
 
 - **Endpoint**: `DELETE /api/v1/email/rules/:id`
 - **Guard / Auth**: `AuthGuard('jwt')`
