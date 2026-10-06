@@ -44,12 +44,17 @@
 
 - **Endpoint**: `POST /api/v1/email/webhooks/google-pubsub`
 - **Guard / Auth**: `None`
-- **Description**: Webhook endpoint called by Google Pub/Sub PUSH notifications when a new email arrives. Ingests raw data, deduplicates via message ID, applies rules, and pushes to processing queue if valid.
+- **Description**: Webhook endpoint triggered by Google Pub/Sub PUSH notifications when a new email arrives in the primary connected inbox. The service fetches raw email content from Gmail API, computes a deduplication hash (`SHA-256` of `Message-ID` + Raw Body) to enforce idempotency, evaluates pre-filtering rules in `email_rules` (`blacklist`, `moneylist`, `whitelist`), persists the record into `email_logs`, and asynchronously enqueues the job to BullMQ (`queue_jobs`) for worker processing:
+  - **Deduplication Check**: If the hash already exists in `email_logs`, immediately returns ACK and skips processing to prevent duplicate financial or calendar entries.
+  - **Blacklist**: Email is marked as `SKIPPED` in `email_logs` and completely bypasses the AI pipeline.
+  - **MoneyList**: Routed with high priority to BullMQ accompanied by a specialized Banking Fluctuation prompt payload.
+  - **Whitelist**: Enqueued with elevated priority in BullMQ for fast-track processing.
+  - **Normal**: Enqueued to the standard BullMQ processing queue.
 
 #### Data Transfer Objects (DTO)
 
 - **Request DTO**: `GooglePubSubWebhookDto`
-  - `message` (`object`, required): Google Pub/Sub message object containing data payload and messageId.
+  - `message` (`object`, required): Google Pub/Sub message object containing base64 data payload, messageId, and publishTime.
   - `subscription` (`string`, required): Google Pub/Sub subscription resource string.
 
 - **Response DTO**: `WebhookAckResponseDto`
@@ -61,7 +66,7 @@
 
 - **Endpoint**: `GET /api/v1/email/logs`
 - **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Retrieves a paginated list of ingested emails from `email_logs` table with status filters.
+- **Description**: Retrieves a paginated list of ingested emails from `email_logs` table with status filters and deduplication metadata.
 
 #### Data Transfer Objects (DTO)
 
@@ -71,7 +76,15 @@
   - `status` (`string`, optional, enum: `['PENDING', 'PROCESSED', 'SKIPPED']`): Filter logs by processing status.
 
 - **Response DTO**: `PaginatedEmailLogsResponseDto`
-  - `items` (`array`): Array of email log records.
+  - `items` (`EmailLogResponseDto[]`): Array of email log records:
+    - `id` (`string`): UUID of the email log record.
+    - `messageId` (`string`): Email header Message-ID.
+    - `sender` (`string`): Sender email address.
+    - `subject` (`string`): Subject line.
+    - `rawBody` (`string`): Raw text/HTML body.
+    - `deduplicationHash` (`string`): SHA-256 hash of `Message-ID` + Raw Body.
+    - `status` (`string`, enum: `['PENDING', 'PROCESSED', 'SKIPPED']`): Ingestion/processing status.
+    - `createdAt` (`string`): Ingestion timestamp.
   - `total` (`number`): Total count of records matching criteria.
   - `page` (`number`): Current page number.
   - `limit` (`number`): Items per page limit.
@@ -82,7 +95,7 @@
 
 - **Endpoint**: `POST /api/v1/email/logs/:id/reprocess`
 - **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Manually pushes a specific email record back to BullMQ queue for re-analysis by the AI processing engine.
+- **Description**: Manually re-queues an existing email record from `email_logs` into BullMQ worker queue for re-analysis by the AI processing engine. Resets email status to `PENDING` and tracks execution status in `queue_jobs`.
 
 #### Data Transfer Objects (DTO)
 
@@ -90,8 +103,8 @@
   - `id` (`string`, path param, UUID): Email log record ID.
 
 - **Response DTO**: `ReprocessEmailResponseDto`
-  - `jobId` (`string`): Created BullMQ queue job ID.
-  - `status` (`string`): Updated status of the email log record.
+  - `jobId` (`string`): Created BullMQ queue job ID in `queue_jobs`.
+  - `status` (`string`): Updated status of the email log record (`PENDING`).
 
 ---
 

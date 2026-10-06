@@ -1,6 +1,6 @@
 # Character & Persona Service
 
-- **General Description**: Handles business logic for AI Character lifecycle management and persona configuration attributes. Ensures single active character integrity when changing character status and validates persona types.
+- **General Description**: Manages core business logic for AI Character lifecycle (creation, modification, activation, deletion) and their associated Persona attribute configurations (system prompts, tone, identity, knowledge background, relationship dynamics, etc.).
 - **Accessed Database Tables**:
   - `characters`
   - `personas`
@@ -11,7 +11,7 @@
 
 ### 1. getCharacters
 
-- **Task Description**: Fetches all existing AI characters stored in the database along with basic metadata.
+- **Task Description**: Retrieves all registered AI character records from the `characters` table, including their active status and voice metadata.
 - **Accessed Tables**: `characters` (Read)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
@@ -21,30 +21,30 @@
 - **Input**: None
 
 - **Output**:
-  - `Promise<CharacterResponseDto[]>`: List of all character records.
+  - `Promise<CharacterResponseDto[]>`: Array of character records.
 
 ---
 
 ### 2. createCharacter
 
-- **Task Description**: Creates a new AI character entry. If set as active, it automatically deactivates all previously active characters to guarantee only one character is active at a time.
-- **Accessed Tables**: `characters` (Read, Write)
+- **Task Description**: Creates a new AI character entry in `characters` with `name`, `voice_id` (Fish.audio), and `source`. Manages single active character state logic if marked active.
+- **Accessed Tables**: `characters` (Write)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
 
 #### Input / Output
 
 - **Input**:
-  - `dto`: `CreateCharacterDto` - Contains `name`, `voiceId`, `source`, and optional `isActive`.
+  - `dto`: `CreateCharacterDto` - Character name, voice ID, source origin, and optional active flag.
 
 - **Output**:
-  - `Promise<CharacterResponseDto>`: Created character entity.
+  - `Promise<CharacterResponseDto>`: Newly created character entity representation.
 
 ---
 
 ### 3. updateCharacter
 
-- **Task Description**: Updates attributes of a specific character by ID. Handles switching the active character status atomically when `isActive` is set to `true`.
+- **Task Description**: Updates AI character details (Name, Voice ID, Source, Active status) by ID. When activating a character, deactivates other characters to maintain a single active persona.
 - **Accessed Tables**: `characters` (Read, Write)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
@@ -52,51 +52,51 @@
 #### Input / Output
 
 - **Input**:
-  - `characterId` (`string`): UUID of the character to update.
-  - `dto`: `UpdateCharacterDto` - Contains optional fields `name`, `voiceId`, `source`, `isActive`.
+  - `id` (`string`): Character UUID.
+  - `dto`: `UpdateCharacterDto` - Partial update properties for character.
 
 - **Output**:
-  - `Promise<CharacterResponseDto>`: Updated character record.
+  - `Promise<CharacterResponseDto>`: Updated character entity representation.
 
 ---
 
 ### 4. deleteCharacter
 
-- **Task Description**: Deletes a character record and all associated persona configurations. Throws NotFoundException if the character does not exist.
-- **Accessed Tables**: `characters` (Write), `personas` (Write - Cascade)
+- **Task Description**: Permanently deletes an AI character and cascades deletion to all associated persona configurations in `personas`.
+- **Accessed Tables**: `characters` (Delete), `personas` (Delete)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
 
 #### Input / Output
 
 - **Input**:
-  - `characterId` (`string`): UUID of the character to delete.
+  - `id` (`string`): Character UUID to delete.
 
 - **Output**:
-  - `Promise<{ success: boolean; message: string }>`: Confirmation object indicating success status.
+  - `Promise<DeleteCharacterResponseDto>`: Success status and confirmation message.
 
 ---
 
 ### 5. getPersonasByCharacterId
 
-- **Task Description**: Retrieves all persona attribute configurations belonging to a specific character ID.
-- **Accessed Tables**: `personas` (Read), `characters` (Read verification)
+- **Task Description**: Fetches all persona attribute configurations (Prompt, Tone, Identity, Knowledge Background, Relationship Dynamics, Other) assigned to a given character from `personas`.
+- **Accessed Tables**: `characters` (Read), `personas` (Read)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
 
 #### Input / Output
 
 - **Input**:
-  - `characterId` (`string`): UUID of the target character.
+  - `characterId` (`string`): Parent character UUID.
 
 - **Output**:
-  - `Promise<PersonaResponseDto[]>`: Array of persona configuration objects.
+  - `Promise<PersonaResponseDto[]>`: Array of persona configurations for the target character.
 
 ---
 
 ### 6. addPersona
 
-- **Task Description**: Adds a new persona attribute (`type` + `value`) to a target character after confirming the character exists.
+- **Task Description**: Validates character existence and adds a new persona attribute configuration (`type` + `value`) to the target character in `personas`.
 - **Accessed Tables**: `characters` (Read), `personas` (Write)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
@@ -104,17 +104,17 @@
 #### Input / Output
 
 - **Input**:
-  - `characterId` (`string`): UUID of the character.
-  - `dto`: `CreatePersonaDto` - Object containing valid `type` enum and `value` text string.
+  - `characterId` (`string`): Target character UUID.
+  - `dto`: `CreatePersonaDto` - DTO containing `type` (enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`) and `value` (prompt content).
 
 - **Output**:
-  - `Promise<PersonaResponseDto>`: Created persona entity.
+  - `Promise<PersonaResponseDto>`: Newly created persona attribute entity representation.
 
 ---
 
 ### 7. updatePersona
 
-- **Task Description**: Updates an existing persona entry's `type` or `value` for a specific character. Validates ownership to ensure persona belongs to the specified `characterId`.
+- **Task Description**: Validates character ownership and updates an existing persona attribute's type or value in `personas`.
 - **Accessed Tables**: `personas` (Read, Write)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
@@ -122,27 +122,27 @@
 #### Input / Output
 
 - **Input**:
-  - `characterId` (`string`): Character UUID.
-  - `personaId` (`string`): Persona UUID.
-  - `dto`: `UpdatePersonaDto` - Object containing optional `type` and `value`.
+  - `characterId` (`string`): Parent character UUID.
+  - `personaId` (`string`): Target persona UUID.
+  - `dto`: `UpdatePersonaDto` - DTO containing updated `type` (enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`) and/or `value`.
 
 - **Output**:
-  - `Promise<PersonaResponseDto>`: Updated persona entity.
+  - `Promise<PersonaResponseDto>`: Updated persona attribute entity representation.
 
 ---
 
 ### 8. deletePersona
 
-- **Task Description**: Deletes a specific persona attribute associated with a character after verifying existence and ownership.
-- **Accessed Tables**: `personas` (Read, Write)
+- **Task Description**: Validates character ownership and deletes the specific persona attribute configuration from `personas`.
+- **Accessed Tables**: `personas` (Delete)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
 
 #### Input / Output
 
 - **Input**:
-  - `characterId` (`string`): Character UUID.
-  - `personaId` (`string`): Persona UUID.
+  - `characterId` (`string`): Parent character UUID.
+  - `personaId` (`string`): Target persona UUID.
 
 - **Output**:
-  - `Promise<{ success: boolean; message: string }>`: Confirmation of persona deletion.
+  - `Promise<DeletePersonaResponseDto>`: Deletion success confirmation status.

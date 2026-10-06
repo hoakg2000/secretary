@@ -46,8 +46,25 @@
 
 ### 3. processPubSubWebhook
 
-- **Task Description**: Decodes incoming Pub/Sub webhooks, fetches email metadata via Gmail API, checks for duplicate hashes in `email_logs`, checks rules against `email_rules` (`blacklist`/`moneylist`/`whitelist`), creates record in `email_logs`, and enqueues job to BullMQ `queue_jobs`.
-- **Accessed Tables**: `email_logs` (Read/Write), `email_rules` (Read), `queue_jobs` (Write)
+- **Task Description**: Handles real-time email ingestion from Google Pub/Sub PUSH notifications:
+  1. Decodes base64 payload from Pub/Sub and retrieves full message details (Message-ID, Sender, Subject, Raw Body) from Gmail API using encrypted OAuth credentials stored in `users`.
+  2. Computes SHA-256 deduplication hash: `deduplication_hash = SHA256(messageId + ":" + rawBody)` to guarantee strict idempotency.
+  3. Checks `email_logs` for existing `deduplication_hash`:
+     - If matched: Exits immediately with `{ success: true }`, ensuring zero duplicate transactions or calendar events upon worker/webhook retries.
+  4. Evaluates pre-filtering rules against `email_rules` (`blacklist`, `moneylist`, `whitelist` with `sender`, `keyword`, `regex` matchers):
+     - **Blacklist**: Persists to `email_logs` with status `SKIPPED`; completely skips BullMQ and AI processing.
+     - **MoneyList**: Persists to `email_logs` with status `PENDING`; enqueues to BullMQ `email-processing-queue` with priority 2 and specialized Banking Fluctuation prompt context to extract balance changes. Creates initial record in `queue_jobs`.
+     - **Whitelist**: Persists to `email_logs` with status `PENDING`; enqueues to BullMQ with priority 1 (High Priority Queue). Creates initial record in `queue_jobs`.
+     - **Standard**: Persists to `email_logs` with status `PENDING`; enqueues to BullMQ with default priority 3. Creates initial record in `queue_jobs`.
+  5. BullMQ Worker Processing Pipeline (Consumer):
+     - Consumes job, logs payload snapshot and tracks retry attempts in `queue_jobs`.
+     - Routes to AI pipeline for classification:
+       - **Category 1 (Balance Fluctuation)**: Extracts transaction details and atomically updates financial ledger via `FinanceService`.
+       - **Category 2 (Schedules & Appointments)**: Extracts appointment details and persists via `CalendarService` Proxy.
+       - **Category 3 (General/Others)**: Generates concise highlights.
+       - **Emergency Alerts**: Pushes instant alert to Telegram Bot API with quick-action buttons.
+     - On successful execution, updates `email_logs.status = 'PROCESSED'` and marks job completed in `queue_jobs`.
+- **Accessed Tables**: `email_logs` (Read/Write), `email_rules` (Read), `queue_jobs` (Write), `users` (Read)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
 
@@ -63,7 +80,7 @@
 
 ### 4. getEmailLogs
 
-- **Task Description**: Queries ingested email log history with pagination and status filtering options.
+- **Task Description**: Queries ingested email log history with pagination, deduplication hash verification, and status filtering options.
 - **Accessed Tables**: `email_logs` (Read)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
@@ -80,7 +97,7 @@
 
 ### 5. reprocessEmailLog
 
-- **Task Description**: Fetches `email_logs` record by ID, verifies existence, resets status to `PENDING`, creates a new entry in `queue_jobs`, and enqueues to BullMQ worker pipeline for re-analysis by AI.
+- **Task Description**: Fetches `email_logs` record by ID, verifies existence, resets status to `PENDING`, inserts a new job tracking entry in `queue_jobs` (Job ID, retry count = 0, payload snapshot), and re-enqueues the email into BullMQ `email-processing-queue` for re-analysis by the AI processing engine.
 - **Accessed Tables**: `email_logs` (Read/Write), `queue_jobs` (Write)
 - **AI Tool Integration**:
   - **Is AI Tool**: `No`
@@ -91,7 +108,7 @@
   - `id` (`string`): UUID of target email log entry.
 
 - **Output**:
-  - `Promise<{ jobId: string; status: string }>`: Created queue job reference and updated status.
+  - `Promise<{ jobId: string; status: string }>`: Created queue job reference and updated status (`PENDING`).
 
 ---
 

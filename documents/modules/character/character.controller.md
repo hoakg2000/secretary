@@ -133,7 +133,7 @@
 - **Response DTO**: `PersonaResponseDto`
   - `id` (`string`): Created persona UUID.
   - `characterId` (`string`): Associated character UUID.
-  - `type` (`string`): Persona attribute category.
+  - `type` (`string`, enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`): Persona attribute category.
   - `value` (`string`): Persona content value.
   - `createdAt` (`string`): ISO timestamp.
   - `updatedAt` (`string`): ISO timestamp.
@@ -157,7 +157,7 @@
 - **Response DTO**: `PersonaResponseDto`
   - `id` (`string`): Persona UUID.
   - `characterId` (`string`): Associated character UUID.
-  - `type` (`string`): Persona attribute category.
+  - `type` (`string`, enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`): Persona attribute category.
   - `value` (`string`): Persona content value.
   - `createdAt` (`string`): ISO timestamp.
   - `updatedAt` (`string`): ISO timestamp.
