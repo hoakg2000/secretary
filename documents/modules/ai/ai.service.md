@@ -188,3 +188,20 @@ The system automatically scans and registers the following 5 AI Tools via `@AiTo
 
 - **Output**:
   - `Promise<{ processedCount: number; prunedCount: number }>`: Summary statistics of decayed and pruned memories.
+
+---
+
+### 9. proactiveFallbackCronJob
+
+- **Task Description**: Automatic **Fallback Trigger (3-hour Quiet Cron)** — decorated with `@Cron('0 */3 * * *')` — that runs every 3 hours to check whether zero qualifying activity (no incoming emails, no user chat messages, no DB mutations) occurred within the preceding 3-hour window. If the quiet condition is satisfied, it internally invokes `triggerProactiveOrchestrator` to evaluate context and dispatch a proactive push/Telegram message. If any activity is detected, the cron exits silently without triggering any notification.
+- **Cron Schedule**: `@Cron('0 */3 * * *')` — fires at minute 0 of every 3rd hour (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00).
+- **Accessed Tables**: `ai_memories` (Read), `memory_decay_logs` (Read), `email_logs` (Read)
+- **AI Tool Integration**:
+  - **Is AI Tool**: `No`
+
+#### Input / Output
+
+- **Input**: None (auto-invoked by NestJS `@nestjs/schedule` CronJob scheduler)
+
+- **Output**:
+  - `Promise<void>`: No return value. Side-effects handled internally via `triggerProactiveOrchestrator`.

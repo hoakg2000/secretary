@@ -3,6 +3,8 @@
 - **Base Endpoint**: `/api/v1/email`
 - **General Description**: Handles Pub/Sub webhook ingestion with token authorization, email logs management, email reprocessing, and CRUD operations for email filtering rules (`email_rules`).
 
+> **Note**: Google OAuth2 Connect & Callback endpoints (`GET /api/v1/auth/google/connect`, `GET /api/v1/auth/google/callback`) are owned exclusively by **Auth Module** (Ref: `auth/auth.controller.md`). Email Module only receives webhook PUSH notifications from Google Pub/Sub after OAuth connection is established.
+
 ---
 
 ## List of Endpoints

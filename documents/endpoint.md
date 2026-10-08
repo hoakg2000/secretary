@@ -52,10 +52,10 @@ Purpose: Balance management, transaction updates/edits, categories management, o
 - **`POST /api/v1/finance/accounts`**: Add new bank account / e-wallet.
 - **`PUT /api/v1/finance/accounts/:id`**: Edit account name, bank code, currency type.
 - **`PATCH /api/v1/finance/accounts/:id/balance`**: Directly adjust base balance (Manual Balance Adjustment).
-- **`GET /api/v1/finance/categories`**: Get list of income and expense categories (filterable by `type`).
-- **`POST /api/v1/finance/categories`**: Create a new income/expense category.
+- **`GET /api/v1/finance/categories`**: Get list of income and expense categories (filterable by `type`: `INCOME`/`EXPENSE`).
+- **`POST /api/v1/finance/categories`**: Create a new income/expense category (Name, Type, Icon, Budget Limit).
 - **`PUT /api/v1/finance/categories/:id`**: Edit category information (Name, Type, Icon, Budget Limit).
-- **`DELETE /api/v1/finance/categories/:id`**: Delete a category.
+- **`DELETE /api/v1/finance/categories/:id`**: Delete a category (guards referential integrity with linked transactions).
 - **`GET /api/v1/finance/transactions`**: Get income/expense transaction history (Paginated, Filter by time, account type, category).
 - **`POST /api/v1/finance/transactions`**: Add a manual transaction (Automatically updates available balance atomically).
 - **`PUT /api/v1/finance/transactions/:id`**: Edit transaction details (Amount, note, category, time) and calculate automatic balance adjustment.
@@ -88,7 +88,7 @@ Purpose: Interactive chat, Streaming TTS, AI Memory CRUD Management (`pgvector`)
 
 #### C. Proactive Agent Trigger
 
-- **`POST /api/v1/ai/proactive/trigger`**: Trigger Proactive Orchestrator (Checks context, urgent events, or 3-hour quiet cron schedule to proactively initiate push messages via Telegram/Push Notification).
+- **`POST /api/v1/ai/proactive/trigger`**: Manually trigger the Proactive Orchestrator (Checks context, urgent events, and dispatches proactive push messages via Telegram/Push Notification). The **3-hour Quiet Fallback Cron** runs automatically server-side via `@Cron()` in `AiService` — no external endpoint required.
 
 ---
 

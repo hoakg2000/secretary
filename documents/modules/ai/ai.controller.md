@@ -143,11 +143,13 @@
 
 ---
 
-### 7. Trigger Proactive Agent Orchestrator
+### 7. Trigger Proactive Agent Orchestrator (Manual)
 
 - **Endpoint**: `POST /api/v1/ai/proactive/trigger`
 - **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Explicitly triggers the Proactive Orchestrator to assess user context, urgent schedule/events, or quiet periods, and optionally dispatch proactive push/Telegram messages.
+- **Description**: **Manually** triggers the Proactive Orchestrator to assess user context, urgent schedule/events, or quiet periods, and optionally dispatch proactive push/Telegram messages.
+
+> **Note — Automatic Fallback Trigger**: The **3-hour Quiet Cron** (`@Cron('0 */3 * * *')`) is implemented as `proactiveFallbackCronJob` in `AiService` (Ref: `ai/ai.service.md`). It runs automatically server-side every 3 hours and calls `triggerProactiveOrchestrator` internally when zero activity is detected. It is **not** exposed as an HTTP endpoint.
 
 #### Data Transfer Objects (DTO)
 

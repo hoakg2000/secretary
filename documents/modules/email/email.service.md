@@ -2,10 +2,11 @@
 
 - **General Description**: Handles business logic for Webhook ingestion processing with token authorization, raw email log persistence, pushing email parsing jobs into BullMQ queue, and manages email filtering rules (`email_rules`).
 - **Accessed Database Tables**:
-  - `users`
   - `email_logs`
   - `email_rules`
   - `queue_jobs`
+
+> **Note**: Google OAuth2 token exchange and user token storage logic (`getGoogleConnectUrl`, `handleGoogleCallback`) are handled exclusively by **Auth Service** (Ref: `auth/auth.service.md`). This service reads the encrypted Google OAuth tokens from `users` table (stored by Auth Service) when fetching raw email content from Gmail API via `processPubSubWebhook`.
 
 ---
 
