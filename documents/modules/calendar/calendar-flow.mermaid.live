@@ -1,0 +1,58 @@
+sequenceDiagram
+    autonumber
+    actor User as Client / User
+    participant Ctrl as CalendarController
+    participant Svc as CalendarService (@AiTool)
+    participant Sync as CalendarSyncService (@Cron)
+    participant DB as Database (PostgreSQL)
+    participant GAPI as Google Calendar API v3
+
+    %% -------------------------------------------------------------
+    %% LUỒNG 1: CRUD & ĐÁNH DẤU TRẠNG THÁI DIRTY
+    %% -------------------------------------------------------------
+    rect rgb(240, 248, 255)
+        note over User, DB: 1. Thao tác CRUD Lịch Cục Bộ (Local Calendar)
+        User->>Ctrl: HTTP Request (POST / PATCH / DELETE /api/v1/calendar)
+        Ctrl->>Svc: Gọi method (createEvent / updateEvent / deleteEvent)
+        Svc->>DB: Ghi/Sửa/Xóa LocalCalendar
+        Svc->>DB: Upsert CalendarSyncState (syncStatus = 'DIRTY')
+        DB-->>Svc: Trả về kết quả đã cập nhật
+        Svc-->>Ctrl: Trả về dữ liệu Event
+        Ctrl-->>User: HTTP Response { statusCode: 200/201, data }
+    end
+
+    %% -------------------------------------------------------------
+    %% LUỒNG 2: AI AGENT INTERACTION VIA @AiTool
+    %% -------------------------------------------------------------
+    rect rgb(245, 245, 220)
+        note over Svc, DB: 2. Tương tác từ AI Agent (Function Calling via @AiTool)
+        participant AI as AI Agent Engine
+        AI->>Svc: Triệu gọi Tool (@AiTool: create_calendar_event / get_calendar_events / ...)
+        Svc->>DB: Truy vấn hoặc cập nhật LocalCalendar & CalendarSyncState ('DIRTY')
+        DB-->>Svc: Kết quả DB
+        Svc-->>AI: Trả dữ liệu JSON cho AI tổng hợp câu trả lời
+    end
+
+    %% -------------------------------------------------------------
+    %% LUỒNG 3: CRONJOB ĐỒNG BỘ NGẦM VỚI GOOGLE CALENDAR
+    %% -------------------------------------------------------------
+    rect rgb(240, 255, 240)
+        note over Sync, GAPI: 3. Cronjob Đồng Bộ Ngầm (Mỗi 5 phút)
+        Sync->>Sync: Tự động kích hoạt @Cron(EVERY_5_MINUTES)
+        Sync->>DB: Lấy OAuth Tokens của Master User (googleAccessToken)
+        DB-->>Sync: Trả về Tokens
+        Sync->>DB: Query các bản ghi CalendarSyncState (syncStatus = 'DIRTY')
+        DB-->>Sync: Trả về danh sách sự kiện cần đồng bộ
+
+        loop Với mỗi sự kiện DIRTY
+            alt Sự kiện chưa có googleEventId (Tạo mới trên Google)
+                Sync->>GAPI: events.insert(calendarId: 'primary', resource)
+                GAPI-->>Sync: Trả về Google Event ID & eTag
+            else Sự kiện đã có googleEventId (Cập nhật trên Google)
+                Sync->>GAPI: events.update(calendarId: 'primary', eventId, resource)
+                GAPI-->>Sync: Trả về updated eTag
+            end
+
+            Sync->>DB: Cập nhật CalendarSyncState (syncStatus = 'SYNCED', eTag, lastSyncedAt = NOW())
+        end
+    end
