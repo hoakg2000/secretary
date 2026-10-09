@@ -1,0 +1,58 @@
+flowchart TD
+    %% SUBGRAPH: EXTERNAL ACTORS & CLIENTS
+    subgraph Clients["Tương tác bên ngoài / Client Interface"]
+        WebDashboard["Web Dashboard / Mobile App"]
+        GooglePubSub["Google Pub/Sub / Email Webhook"]
+        AiEngine["Gemini AI Engine (Function Calling)"]
+    end
+
+    %% SUBGRAPH: GUARDS & CONTROLLERS
+    subgraph ControllerLayer["Finance Controller Layer (REST API)"]
+        JwtGuard["JwtAuthGuard"]
+        
+        BankCtrl["BankAccount Endpoints\n- GET/POST/PATCH/DELETE /accounts\n- GET /accounts/total-balance"]
+        CatCtrl["Category Endpoints\n- GET/POST/DELETE /categories"]
+        TxCtrl["Transaction Endpoints\n- POST /transactions\n- POST /transactions/search\n- GET/DELETE /transactions/:id"]
+    end
+
+    %% SUBGRAPH: SERVICE & BUSINESS LOGIC
+    subgraph ServiceLayer["Finance Service Layer"]
+        BankService["Bank Account Management"]
+        CatService["Category Management"]
+        TxService["Transaction Management & Auto-Balance Logic"]
+        AiToolReg["@AiTool Decorator Handlers\n- get_financial_summary\n- create_financial_transaction\n- search_financial_transactions"]
+    end
+
+    %% SUBGRAPH: DATABASE & MODELS
+    subgraph DatabaseLayer["Database Layer (Prisma ORM)"]
+        BankAccountDB[("bank_accounts\n(cached_balance, bank_code, account_number)")]
+        CategoryDB[("categories\n(name, type, icon, budget_limit)")]
+        TransactionDB[("transactions\n(amount, type, counterparty, transaction_time)")]
+        EmailLogDB[("email_logs\n(message_id, sender, status)")]
+    end
+
+    %% FLOWS & CONNECTIONS
+    WebDashboard -->|1. JWT Auth Request| JwtGuard
+    JwtGuard --> BankCtrl
+    JwtGuard --> CatCtrl
+    JwtGuard --> TxCtrl
+
+    GooglePubSub -->|2. Email biến động số dư| EmailLogDB
+    EmailLogDB -.->|Gắn emailLogId khi tạo Tx| TxService
+
+    AiEngine -->|3. Gọi AI Tools| AiToolReg
+    AiToolReg --> BankService
+    AiToolReg --> TxService
+
+    BankCtrl --> BankService
+    CatCtrl --> CatService
+    TxCtrl --> TxService
+
+    BankService -->|CRUD| BankAccountDB
+    CatService -->|CRUD| CategoryDB
+
+    TxService -->|Tạo / Xóa Transaction| TransactionDB
+    TxService -->|4. Tự động tính toán & cập nhật cached_balance| BankAccountDB
+    TransactionDB -.->|FK: accountId| BankAccountDB
+    TransactionDB -.->|FK: categoryId| CategoryDB
+    TransactionDB -.->|FK: emailLogId| EmailLogDB
