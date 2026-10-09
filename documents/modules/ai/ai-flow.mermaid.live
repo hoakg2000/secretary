@@ -1,0 +1,97 @@
+flowchart TB
+    %% DEFINITION OF SUBGRAPHS (MODULES & EXTERNAL SYSTEMS)
+    
+    subgraph Client ["Client Layer (Web / Mobile App)"]
+        UI_Chat["Chat Interface (Next.js / React Native)"]
+        UI_Audio["Audio Player"]
+    end
+
+    subgraph External ["External Services / Models"]
+        GeminiAPI["Google Gemini API (gemini-2.5-flash / text-embedding-004)"]
+        FishAudio["Fish.audio API (Text-to-Speech)"]
+    end
+
+    subgraph OtherModules ["Other NestJS Modules"]
+        EmailMod["Email Module (EmailLog)"]
+        FinanceMod["Finance Module (Transaction / BankAccount)"]
+        CharMod["Character & Persona Module"]
+    end
+
+    subgraph AIAgentModule ["AI Agent Module (src/ai-agent/)"]
+        Controller["AiAgentController (/api/v1/ai-agent)"]
+        
+        subgraph Services ["Core Services"]
+            AgentSvc["AgentService (Orchestrator / ReAct Loop)"]
+            MemSvc["MemoryService (pgvector + Hybrid Search + Decay)"]
+            RagSvc["RagChunkService (Document Splitter & Sync)"]
+            TtsSvc["TtsService (Fish.audio Integration)"]
+        end
+
+        subgraph Tools ["Tool Registry"]
+            MemTools["MemoryTools (@AiTool Decorators)"]
+            FinTools["FinanceTools / Other Module Tools (@AiTool)"]
+        end
+
+        subgraph Queries ["Raw Query Layer"]
+            MemQueries["MemoryQueries (Pure SQL Builder)"]
+        end
+    end
+
+    subgraph Database ["PostgreSQL Database (pgvector + tsvector)"]
+        DB_Memory[("ai_memories (vector 1536 + content_tsv)")]
+        DB_Rag[("rag_chunks")]
+        DB_Char[("characters & personas")]
+    end
+
+    %% ==========================================
+    %% FLOW 1: CHAT & REACT FUNCTION CALLING LOOP (SSE)
+    %% ==========================================
+    UI_Chat -- "1. POST /chat/stream (Prompt)" --> Controller
+    Controller -- "2. Delegate Stream" --> AgentSvc
+    AgentSvc -- "3. Read System Prompt / Active Persona" --> DB_Char
+    AgentSvc -- "4. Auto-discover @AiTool() via DiscoveryService" --> Tools
+    
+    AgentSvc -- "5. Send Prompt & Tool Definitions" --> GeminiAPI
+    GeminiAPI -- "6. Return Function Call Request (e.g. search_semantic_memory)" --> AgentSvc
+    
+    AgentSvc -- "7. Execute Tool Method" --> MemTools
+    MemTools -- "8. Search Memories" --> MemSvc
+    MemSvc -- "9. Execute SQL with Vector <=> & FTS ts_rank" --> MemQueries
+    MemQueries -- "10. Query & Update last_accessed_at" --> DB_Memory
+    DB_Memory -- "11. Raw Results" --> MemSvc
+    MemSvc -- "12. Decayed & Hybrid Scored Memories" --> MemTools
+    MemTools -- "13. Tool Result Payload" --> AgentSvc
+    
+    AgentSvc -- "14. Send Function Response back to Gemini" --> GeminiAPI
+    GeminiAPI -- "15. Final Answer Generation" --> AgentSvc
+    AgentSvc -- "16. SSE Event Stream (type: text/tool_call/done)" --> Controller
+    Controller -- "17. Real-time Response Stream" --> UI_Chat
+
+    %% ==========================================
+    %% FLOW 2: MANUAL MEMORY CRUD
+    %% ==========================================
+    UI_Chat -- "POST /memories (Save Memory)" --> Controller
+    Controller --> MemSvc
+    MemSvc -- "Generate Embedding Vector" --> GeminiAPI
+    GeminiAPI -- "Vector (1536 dimensions)" --> MemSvc
+    MemSvc -- "Prisma Execute Raw (Update vector & tsvector)" --> MemQueries
+    MemQueries --> DB_Memory
+
+    %% ==========================================
+    %% FLOW 3: DATA SYNC & RAG CHUNKING (INTERNAL EVENT/CALLS)
+    %% ==========================================
+    EmailMod -- "Sync Processed Email" --> RagSvc
+    FinanceMod -- "Sync Financial Transaction" --> RagSvc
+    RagSvc -- "1. Save High Priority Memory" --> MemSvc
+    RagSvc -- "2. Chunk Long Text (RecursiveTextSplitter)" --> DB_Rag
+
+    %% ==========================================
+    %% FLOW 4: TEXT-TO-SPEECH (TTS)
+    %% ==========================================
+    UI_Chat -- "POST /tts (Text)" --> Controller
+    Controller --> TtsSvc
+    TtsSvc -- "Fetch Active Voice ID" --> DB_Char
+    TtsSvc -- "Request TTS MP3 Buffer" --> FishAudio
+    FishAudio -- "Audio Buffer (MP3)" --> TtsSvc
+    TtsSvc -- "Return Audio Stream" --> Controller
+    Controller -- "Audio Binary Stream" --> UI_Audio
