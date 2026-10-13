@@ -8,7 +8,6 @@ import {
   Query,
   Req,
   Res,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -17,14 +16,28 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
+import { Public } from '../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
+
+const REFRESH_COOKIE = 'refreshToken';
+const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
 @Controller('api/v1/auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  private setRefreshCookie(res: Response, token: string, expiresAt: Date) {
+    res.cookie(REFRESH_COOKIE, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: REFRESH_COOKIE_PATH,
+      maxAge: expiresAt.getTime() - Date.now(),
+    });
+  }
 
   @ApiOperation({ summary: 'Đăng nhập Master User bằng Email/Password' })
   @ApiResponse({
@@ -36,6 +49,7 @@ export class AuthController {
     status: 401,
     description: 'Email hoặc mật khẩu không chính xác',
   })
+  @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -49,13 +63,7 @@ export class AuthController {
 
     const result = await this.authService.login(loginDto, userAgent, ipAddress);
 
-    res.cookie('refreshToken', result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/api/v1/auth',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    this.setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);
 
     return {
       statusCode: HttpStatus.OK,
@@ -67,40 +75,64 @@ export class AuthController {
     };
   }
 
-  @ApiBearerAuth('JWT-auth') // Đánh dấu endpoint cần Bearer Access Token
-  @ApiOperation({ summary: 'Lấy thông tin phiên làm việc hiện tại' })
+  @ApiOperation({
+    summary:
+      'Làm mới Access Token bằng Refresh Token (cookie hoặc body). Refresh Token được xoay vòng sau mỗi lần gọi',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Refresh Token không hợp lệ, hết hạn hoặc đã được sử dụng',
+  })
+  @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refreshAccessToken(@Req() req: Request, @Body() body: RefreshTokenDto) {
+  async refreshAccessToken(
+    @Req() req: Request,
+    @Body() body: RefreshTokenDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     // Ưu tiên lấy Refresh Token từ HTTP-Only Cookie, nếu không có mới lấy từ Body
-    const refreshToken = req.cookies?.['refreshToken'] || body.refreshToken;
+    const fromCookie: string | undefined = req.cookies?.[REFRESH_COOKIE];
+    const result = await this.authService.refreshAccessToken(
+      fromCookie || body?.refreshToken,
+    );
 
-    const result = await this.authService.refreshAccessToken(refreshToken);
+    this.setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);
 
     return {
       statusCode: HttpStatus.OK,
       message: 'Làm mới Access Token thành công',
-      data: result,
+      data: {
+        accessToken: result.accessToken,
+        // Client không dùng cookie (mobile) nhận token kế nhiệm qua body
+        ...(!fromCookie && { refreshToken: result.refreshToken }),
+      },
     };
   }
 
-  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Đăng xuất phiên hiện tại (hoặc một phiên khác của chính user)',
+  })
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   async logout(
     @Req() req: Request & { user: { userId: string; sessionId: string } },
+    @Body() body: LogoutDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = req.cookies?.['refreshToken'];
     const { userId, sessionId } = req.user;
+    const targetSessionId = body?.sessionId ?? sessionId;
 
-    await this.authService.logout(userId, sessionId, refreshToken);
+    await this.authService.logout(userId, targetSessionId);
 
-    // Xóa HTTP-Only Cookie
-    res.clearCookie('refreshToken', {
-      httpOnly: true,
-      path: '/api/v1/auth',
-    });
+    // Chỉ xóa cookie khi đăng xuất chính phiên đang dùng
+    if (targetSessionId === sessionId) {
+      res.clearCookie(REFRESH_COOKIE, {
+        httpOnly: true,
+        path: REFRESH_COOKIE_PATH,
+      });
+    }
 
     return {
       statusCode: HttpStatus.OK,
@@ -118,7 +150,6 @@ export class AuthController {
     status: 401,
     description: 'Chưa xác thực hoặc Token không hợp lệ',
   })
-  @UseGuards(JwtAuthGuard)
   @Get('session')
   @HttpCode(HttpStatus.OK)
   async getActiveSession(
@@ -146,11 +177,10 @@ export class AuthController {
     description: 'Lấy URL kết nối Google thành công',
   })
   @ApiResponse({ status: 401, description: 'Chưa xác thực' })
-  @UseGuards(JwtAuthGuard)
   @Get('google/connect')
   @HttpCode(HttpStatus.OK)
-  async getGoogleConnectUrl() {
-    const url = this.authService.getGoogleConnectUrl();
+  async getGoogleConnectUrl(@Req() req: Request & { user: { userId: string } }) {
+    const url = this.authService.getGoogleConnectUrl(req.user.userId);
 
     return {
       statusCode: HttpStatus.OK,
@@ -168,18 +198,29 @@ export class AuthController {
     required: true,
     description: 'Authorization Code trả về từ Google',
   })
+  @ApiQuery({
+    name: 'state',
+    type: String,
+    required: true,
+    description: 'State do server ký khi tạo URL kết nối',
+  })
   @ApiResponse({
     status: 200,
     description: 'Kết nối và lưu Token Google thành công',
   })
   @ApiResponse({
     status: 400,
-    description: 'Mã code không hợp lệ hoặc lấy token thất bại',
+    description: 'code/state không hợp lệ hoặc lấy token thất bại',
   })
+  // Google redirect trình duyệt về đây, không có Bearer token: xác thực bằng state đã ký
+  @Public()
   @Get('google/callback')
   @HttpCode(HttpStatus.OK)
-  async handleGoogleCallback(@Query('code') code: string) {
-    const result = await this.authService.handleGoogleCallback(code);
+  async handleGoogleCallback(
+    @Query('code') code: string,
+    @Query('state') state: string,
+  ) {
+    const result = await this.authService.handleGoogleCallback(code, state);
 
     return {
       statusCode: HttpStatus.OK,

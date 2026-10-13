@@ -22,6 +22,16 @@ describe('env validation', () => {
     expect(() => validate(rest)).toThrow(/JWT_SECRET/);
   });
 
+  it('requires TOKEN_ENCRYPTION_KEY only when Google OAuth is configured', () => {
+    expect(() => validate({ ...base, GOOGLE_CLIENT_ID: 'id' })).toThrow(
+      /TOKEN_ENCRYPTION_KEY/,
+    );
+    const key = Buffer.alloc(32, 1).toString('base64');
+    expect(() =>
+      validate({ ...base, GOOGLE_CLIENT_ID: 'id', TOKEN_ENCRYPTION_KEY: key }),
+    ).not.toThrow();
+  });
+
   it('rejects a short secret', () => {
     expect(() => validate({ ...base, JWT_REFRESH_SECRET: 'short' })).toThrow(
       /JWT_REFRESH_SECRET/,

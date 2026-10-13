@@ -1,0 +1,79 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { google } from 'googleapis';
+import { decryptToken, encryptToken } from '../common/crypto/token-cipher';
+import { PrismaService } from '../prisma/prisma.service';
+
+interface GoogleTokens {
+  access_token?: string | null;
+  refresh_token?: string | null;
+  expiry_date?: number | null;
+}
+
+@Injectable()
+export class GoogleClientFactory {
+  private readonly logger = new Logger(GoogleClientFactory.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  private get key(): string {
+    return this.configService.getOrThrow<string>('TOKEN_ENCRYPTION_KEY');
+  }
+
+  createOAuthClient() {
+    return new google.auth.OAuth2(
+      this.configService.get<string>('GOOGLE_CLIENT_ID'),
+      this.configService.get<string>('GOOGLE_CLIENT_SECRET'),
+      this.configService.get<string>('GOOGLE_REDIRECT_URI'),
+    );
+  }
+
+  /** Lưu Google tokens (đã mã hóa AES-256-GCM) vào bảng users */
+  async saveTokens(userId: string, tokens: GoogleTokens) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(tokens.access_token && {
+          googleAccessToken: encryptToken(tokens.access_token, this.key),
+        }),
+        ...(tokens.refresh_token && {
+          googleRefreshToken: encryptToken(tokens.refresh_token, this.key),
+        }),
+        ...(tokens.expiry_date && {
+          googleTokenExpiresAt: new Date(tokens.expiry_date),
+        }),
+      },
+    });
+  }
+
+  /**
+   * OAuth2 client cho user đã kết nối Google; null nếu chưa kết nối.
+   * Token được Google làm mới sẽ tự động lưu lại vào DB.
+   */
+  async forUser(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.googleAccessToken) {
+      return null;
+    }
+
+    const client = this.createOAuthClient();
+    client.setCredentials({
+      access_token: decryptToken(user.googleAccessToken, this.key),
+      refresh_token: user.googleRefreshToken
+        ? decryptToken(user.googleRefreshToken, this.key)
+        : undefined,
+      expiry_date: user.googleTokenExpiresAt?.getTime(),
+    });
+
+    client.on('tokens', (tokens) => {
+      this.saveTokens(userId, tokens).catch((error) =>
+        this.logger.error('Không lưu được Google token đã làm mới', error),
+      );
+    });
+
+    return client;
+  }
+}

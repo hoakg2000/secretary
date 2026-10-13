@@ -1,16 +1,16 @@
 import {
   BadRequestException,
   Injectable,
-  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import { google } from 'googleapis';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+import { GoogleClientFactory } from './google-client.factory';
 
 @Injectable()
 export class AuthService {
@@ -18,11 +18,53 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly googleClientFactory: GoogleClientFactory,
   ) {}
 
   // Helper băm token bằng SHA-256
   private hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private signAccessToken(userId: string, email: string, sessionId: string) {
+    return this.jwtService.sign({
+      sub: userId,
+      email,
+      sessionId,
+      typ: 'access',
+    });
+  }
+
+  /**
+   * Tạo Refresh Token gắn với session và lưu hash vào DB.
+   * Dùng secret riêng + typ 'refresh' nên không thể dùng làm Access Token.
+   */
+  private async issueRefreshToken(
+    db: Prisma.TransactionClient,
+    userId: string,
+    sessionId: string,
+  ) {
+    const refreshToken = this.jwtService.sign(
+      // jti: hai token ký trong cùng một giây vẫn phải khác nhau (token_hash là unique)
+      { sub: userId, sessionId, typ: 'refresh', jti: crypto.randomUUID() },
+      {
+        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        expiresIn: this.configService.getOrThrow('JWT_REFRESH_EXPIRES_IN'),
+      },
+    );
+    // Hạn trong DB và cookie lấy từ chính claim exp của token
+    const expiresAt = new Date(this.jwtService.decode(refreshToken).exp * 1000);
+
+    await db.refreshToken.create({
+      data: {
+        userId,
+        sessionId,
+        tokenHash: this.hashToken(refreshToken),
+        expiresAt,
+      },
+    });
+
+    return { refreshToken, refreshExpiresAt: expiresAt };
   }
 
   async login(loginDto: LoginDto, userAgent?: string, ipAddress?: string) {
@@ -33,7 +75,7 @@ export class AuthService {
       where: { email },
     });
 
-    if (!user || !user.passwordHash) {
+    if (!user || !user.passwordHash || !user.isActive) {
       throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
     }
 
@@ -52,31 +94,17 @@ export class AuthService {
       },
     });
 
-    // 4. Tạo JWT Access Token và Refresh Token
-    const payload = { sub: user.id, email: user.email, sessionId: session.id };
-    const accessToken = this.jwtService.sign(payload);
-
-    const refreshToken = this.jwtService.sign(payload, {
-      expiresIn: (this.configService.get('JWT_REFRESH_EXPIRES_IN') ||
-        '7d') as any,
-    });
-
-    // 5. Băm Refresh Token và lưu vào database
-    const tokenHash = this.hashToken(refreshToken);
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-
-    await this.prisma.refreshToken.create({
-      data: {
-        userId: user.id,
-        tokenHash,
-        expiresAt,
-      },
-    });
+    // 4. Tạo JWT Access Token và Refresh Token (hash lưu vào database)
+    const accessToken = this.signAccessToken(user.id, user.email, session.id);
+    const refresh = await this.issueRefreshToken(
+      this.prisma,
+      user.id,
+      session.id,
+    );
 
     return {
       accessToken,
-      refreshToken,
+      ...refresh,
       user: {
         id: user.id,
         email: user.email,
@@ -93,7 +121,7 @@ export class AuthService {
     let payload: any;
     try {
       payload = await this.jwtService.verifyAsync(refreshTokenStr, {
-        secret: this.configService.getOrThrow<string>('JWT_SECRET'),
+        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       });
     } catch {
       throw new UnauthorizedException(
@@ -101,67 +129,71 @@ export class AuthService {
       );
     }
 
+    if (payload.typ !== 'refresh' || !payload.sessionId) {
+      throw new UnauthorizedException('Refresh Token không hợp lệ');
+    }
+
     // 2. Băm Refresh Token nhận được và tìm trong Database
-    const tokenHash = this.hashToken(refreshTokenStr);
     const storedToken = await this.prisma.refreshToken.findUnique({
-      where: { tokenHash },
+      where: { tokenHash: this.hashToken(refreshTokenStr) },
+      include: {
+        session: {
+          include: { user: { select: { email: true, isActive: true } } },
+        },
+      },
     });
 
-    if (
-      !storedToken ||
-      storedToken.isRevoked ||
-      storedToken.expiresAt < new Date()
-    ) {
+    if (!storedToken || storedToken.expiresAt < new Date()) {
       throw new UnauthorizedException(
         'Refresh Token đã bị thu hồi hoặc hết hạn',
       );
     }
 
-    // 3. Kiểm tra User Session còn tồn tại không
-    if (payload.sessionId) {
-      const session = await this.prisma.userSession.findUnique({
-        where: { id: payload.sessionId },
+    // 3. Token đã xoay vòng mà bị dùng lại -> replay: hủy cả phiên (cascade xóa mọi refresh token của phiên)
+    if (storedToken.isRevoked) {
+      await this.prisma.userSession.deleteMany({
+        where: { id: storedToken.sessionId },
       });
-      if (!session) {
-        throw new UnauthorizedException('Phiên đăng nhập không còn tồn tại');
-      }
+      throw new UnauthorizedException(
+        'Refresh Token đã được sử dụng. Phiên đăng nhập đã bị hủy',
+      );
     }
 
-    // 4. Tạo Access Token mới
-    const newPayload = {
-      sub: payload.sub,
-      email: payload.email,
-      sessionId: payload.sessionId,
-    };
-    const accessToken = this.jwtService.sign(newPayload);
+    const { session } = storedToken;
+    if (session.userId !== payload.sub || !session.user.isActive) {
+      throw new UnauthorizedException('Phiên đăng nhập không còn tồn tại');
+    }
 
-    return { accessToken };
+    // 4. Xoay vòng: thu hồi token cũ và cấp token kế nhiệm trong cùng một transaction
+    const refresh = await this.prisma.$transaction(async (tx) => {
+      const revoked = await tx.refreshToken.updateMany({
+        where: { id: storedToken.id, isRevoked: false },
+        data: { isRevoked: true },
+      });
+      if (revoked.count === 0) {
+        throw new UnauthorizedException('Refresh Token đã được sử dụng');
+      }
+      return this.issueRefreshToken(tx, session.userId, session.id);
+    });
+
+    return {
+      accessToken: this.signAccessToken(
+        session.userId,
+        session.user.email,
+        session.id,
+      ),
+      ...refresh,
+    };
   }
 
-  async logout(userId: string, sessionId?: string, refreshTokenStr?: string) {
-    // 1. Thu hồi (revoke) Refresh Token nếu có
-    if (refreshTokenStr) {
-      const tokenHash = this.hashToken(refreshTokenStr);
-      await this.prisma.refreshToken.updateMany({
-        where: { tokenHash, userId },
-        data: { isRevoked: true },
-      });
-    } else {
-      // Nếu không có token truyền lên, vô hiệu hóa toàn bộ refresh tokens còn hiệu lực của user
-      await this.prisma.refreshToken.updateMany({
-        where: { userId, isRevoked: false },
-        data: { isRevoked: true },
-      });
-    }
-
-    // 2. Xóa phiên làm việc trong bảng user_sessions
-    if (sessionId) {
-      await this.prisma.userSession
-        .delete({
-          where: { id: sessionId },
-        })
-        .catch(() => null);
-    }
+  /**
+   * Kết thúc một phiên của user (mặc định là phiên hiện tại).
+   * Refresh token của phiên bị xóa theo (onDelete: Cascade).
+   */
+  async logout(userId: string, sessionId: string) {
+    await this.prisma.userSession.deleteMany({
+      where: { id: sessionId, userId },
+    });
 
     return { success: true };
   }
@@ -207,77 +239,57 @@ export class AuthService {
     };
   }
 
-  getGoogleConnectUrl(): string {
-    const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
-    const clientSecret = this.configService.get<string>('GOOGLE_CLIENT_SECRET');
-    const redirectUri = this.configService.get<string>('GOOGLE_REDIRECT_URI');
-
-    const oauth2Client = new google.auth.OAuth2(
-      clientId,
-      clientSecret,
-      redirectUri,
-    );
-
+  getGoogleConnectUrl(userId: string): string {
     const scopes = [
       'https://mail.google.com/',
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/userinfo.email',
     ];
 
-    return oauth2Client.generateAuthUrl({
+    // state ký bằng JWT, mang userId: callback không cần (và không được) đoán user
+    const state = this.jwtService.sign(
+      { sub: userId, typ: 'oauth_state' },
+      { expiresIn: '10m' },
+    );
+
+    return this.googleClientFactory.createOAuthClient().generateAuthUrl({
       access_type: 'offline', // Để Google trả về Refresh Token
       prompt: 'consent', // Bắt buộc hiển thị màn hình chấp thuận để thu được Refresh Token
       scope: scopes,
+      state,
     });
   }
 
-  async handleGoogleCallback(code: string, userId?: string) {
+  async handleGoogleCallback(code?: string, state?: string) {
     if (!code) {
       throw new BadRequestException('Mã xác thực (code) không hợp lệ');
     }
 
-    const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
-    const clientSecret = this.configService.get<string>('GOOGLE_CLIENT_SECRET');
-    const redirectUri = this.configService.get<string>('GOOGLE_REDIRECT_URI');
+    // 1. Xác minh state: phải do server ký cho đúng mục đích OAuth
+    let userId: string;
+    try {
+      const payload = this.jwtService.verify(state ?? '');
+      if (payload.typ !== 'oauth_state' || !payload.sub) {
+        throw new Error('wrong token type');
+      }
+      userId = payload.sub;
+    } catch {
+      throw new BadRequestException('Tham số state không hợp lệ hoặc đã hết hạn');
+    }
 
-    const oauth2Client = new google.auth.OAuth2(
-      clientId,
-      clientSecret,
-      redirectUri,
-    );
-
-    // 1. Đổi mã Authorization Code lấy Access & Refresh Tokens từ Google
-    const { tokens } = await oauth2Client.getToken(code);
+    // 2. Đổi mã Authorization Code lấy Access & Refresh Tokens từ Google
+    const { tokens } = await this.googleClientFactory
+      .createOAuthClient()
+      .getToken(code);
 
     if (!tokens.access_token) {
       throw new BadRequestException('Không thể lấy Access Token từ Google');
     }
 
-    // 2. Lấy ID người dùng (Nếu không truyền userId, mặc định lấy Master User do là hệ thống Single User)
-    let targetUserId = userId;
-    if (!targetUserId) {
-      const user = await this.prisma.user.findFirst();
-      if (!user) {
-        throw new NotFoundException('Không tìm thấy Master User');
-      }
-      targetUserId = user.id;
-    }
-
-    // 3. Tính thời gian hết hạn của Access Token
-    const expiresAt = tokens.expiry_date
-      ? new Date(tokens.expiry_date)
-      : new Date(Date.now() + 3600 * 1000);
-
-    // 4. Cập nhật Google tokens vào bảng users
-    await this.prisma.user.update({
-      where: { id: targetUserId },
-      data: {
-        googleAccessToken: tokens.access_token,
-        ...(tokens.refresh_token && {
-          googleRefreshToken: tokens.refresh_token,
-        }),
-        googleTokenExpiresAt: expiresAt,
-      },
+    // 3. Mã hóa và lưu Google tokens vào bảng users
+    await this.googleClientFactory.saveTokens(userId, {
+      ...tokens,
+      expiry_date: tokens.expiry_date ?? Date.now() + 3600 * 1000,
     });
 
     return { success: true };

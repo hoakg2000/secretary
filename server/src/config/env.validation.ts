@@ -1,10 +1,13 @@
 import { plainToInstance } from 'class-transformer';
 import {
+  IsBase64,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Length,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -74,8 +77,10 @@ export class EnvironmentVariables {
   @IsString()
   FISH_AUDIO_DEFAULT_VOICE_ID?: string;
 
-  @IsOptional()
-  @IsString()
+  // 32 bytes, base64 (44 ký tự). Bắt buộc khi bật Google OAuth vì token Google được mã hóa trước khi lưu
+  @ValidateIf((env: EnvironmentVariables) => !!env.GOOGLE_CLIENT_ID)
+  @IsBase64()
+  @Length(44, 44)
   TOKEN_ENCRYPTION_KEY?: string;
 
   @IsOptional()
