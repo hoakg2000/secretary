@@ -38,8 +38,7 @@ coverage/
 # Environment & Local Secrets
 # ==========================================
 .env
-.env*.local
-.env.production
+.env.*
 !.env.example
 
 # ==========================================
@@ -78,3 +77,16 @@ Desktop.ini
 *.njsproj
 *.sln
 *.sw?
+
+# ==========================================
+# Python
+# ==========================================
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ==========================================
+# Local tooling
+# ==========================================
+.claude/settings.local.json
