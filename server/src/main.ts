@@ -1,12 +1,23 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Sau reverse proxy / tunnel: req.ip (ghi lúc đăng nhập, khóa của login throttle) phải là IP client thật.
+  // Số = số proxy đứng trước server; giá trị khác = danh sách IP/subnet tin cậy ('loopback', '10.0.0.0/8')
+  const trustProxy = process.env.TRUST_PROXY;
+  if (trustProxy) {
+    app.set(
+      'trust proxy',
+      /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy,
+    );
+  }
 
   app.use(helmet());
   app.use(cookieParser());

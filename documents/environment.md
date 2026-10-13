@@ -35,6 +35,7 @@ Validated at startup by `server/src/config/env.validation.ts`. Template: `server
 | `CALENDAR_SYNC_CRON` | every 5 minutes | Calendar push-sync schedule (6-field cron expression) |
 | `APP_TIMEZONE` | `Asia/Ho_Chi_Minh` | Reminder text, chat system instruction. Stored times are UTC. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | Telegram text delivery of proactive notifications. Without both, the dispatch status is `NOT_CONFIGURED` and nothing is sent. |
+| `TRUST_PROXY` | — | Set only behind a reverse proxy or tunnel, so that `req.ip` (recorded at login, key of the login throttle) is the real client address. A number is the count of proxies in front of the server (`1`); anything else is a list of trusted addresses or subnets (`loopback`, `10.0.0.0/8`). Unset: the socket address is used. |
 | `GMAIL_PUBSUB_TOPIC` | — | `projects/<project>/topics/<topic>`. Gmail watch target, renewed daily and at startup. |
 | `PUBSUB_PUSH_AUDIENCE` | — | Audience configured on the push subscription; checked on every push. |
 | `PUBSUB_PUSH_SERVICE_ACCOUNT` | — | Email of the push subscription's service account; checked on every push. Without all three Pub/Sub variables `POST /email/pubsub` answers 503. |

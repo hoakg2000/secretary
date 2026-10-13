@@ -103,6 +103,11 @@ export class EnvironmentVariables {
   @IsString()
   TELEGRAM_CHAT_ID?: string;
 
+  // Chỉ đặt khi chạy sau reverse proxy: số hop hoặc danh sách IP/subnet (Express 'trust proxy')
+  @IsOptional()
+  @IsString()
+  TRUST_PROXY?: string;
+
   // Gmail Pub/Sub push: thiếu một trong ba thì POST /email/pubsub trả 503
   @IsOptional()
   @IsString()
