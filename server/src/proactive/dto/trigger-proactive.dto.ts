@@ -10,8 +10,6 @@ export enum ProactiveTriggerType {
 
 export enum ProactiveChannel {
   TELEGRAM = 'TELEGRAM',
-  PUSH_NOTIFICATION = 'PUSH_NOTIFICATION',
-  ALL = 'ALL',
 }
 
 export class TriggerProactiveDto {

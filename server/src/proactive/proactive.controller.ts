@@ -23,7 +23,7 @@ export class ProactiveController {
   @ApiOperation({
     summary: 'Kích hoạt thông báo / hành động chủ động (Proactive Trigger)',
     description:
-      'Đánh giá ngữ cảnh và gửi thông báo qua Telegram hoặc Push Notification dựa trên loại trigger và dữ liệu gửi lên.',
+      'Gửi thông báo qua Telegram dựa trên loại trigger và dữ liệu gửi lên.',
   })
   @ApiResponse({
     status: 200,
@@ -43,7 +43,7 @@ export class ProactiveController {
     const data = await this.proactiveService.evaluateAndTrigger(dto);
     return {
       statusCode: HttpStatus.OK,
-      // data.result.status cho biết thông báo đã gửi thật (SENT) hay mới chỉ ghi log (LOGGED)
+      // data.result.status: SENT (đã gửi thật), FAILED hoặc NOT_CONFIGURED
       message: 'Đã xử lý trigger thông báo chủ động',
       data,
     };

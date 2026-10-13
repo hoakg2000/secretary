@@ -1,7 +1,7 @@
 import { ProactiveService } from './proactive.service';
 import { ProactiveTriggerType } from './dto/trigger-proactive.dto';
 
-function build(timeZone: string) {
+function build(timeZone: string, sendStatus = 'SENT') {
   const event: any = {
     id: 'e1',
     title: 'Họp',
@@ -18,20 +18,26 @@ function build(timeZone: string) {
     },
   };
   const config: any = { get: () => timeZone };
-  const service = new ProactiveService(prisma, config);
+  const telegram: any = { sendMessage: vi.fn().mockResolvedValue(sendStatus) };
+  const service = new ProactiveService(prisma, config, telegram);
   const trigger = vi.spyOn(service, 'evaluateAndTrigger');
-  return { prisma, service, trigger };
+  return { prisma, service, trigger, telegram };
 }
 
 describe('ProactiveService', () => {
-  it('reports LOGGED, not SENT, while no channel is implemented', async () => {
-    const { service } = build('UTC');
+  it.each([
+    ['SENT', true],
+    ['FAILED', false],
+    ['NOT_CONFIGURED', false],
+  ])('reports %s from the Telegram client, success=%s', async (status, success) => {
+    const { service, telegram } = build('UTC', status);
     const result = await service.evaluateAndTrigger({
       type: ProactiveTriggerType.CUSTOM,
       message: 'hi',
     });
-    expect(result.success).toBe(false);
-    expect(result.result.status).toBe('LOGGED');
+    expect(telegram.sendMessage).toHaveBeenCalledWith('hi');
+    expect(result.success).toBe(success);
+    expect(result.result.status).toBe(status);
   });
 
   it('two consecutive cron runs over the same event dispatch once', async () => {
@@ -45,6 +51,16 @@ describe('ProactiveService', () => {
       remindedAt: null,
       deletedAt: null,
     });
+  });
+
+  it('a failed delivery is not marked reminded and is retried by the next run', async () => {
+    const { prisma, service, trigger } = build('UTC', 'FAILED');
+
+    await service.handleFallbackCron();
+    await service.handleFallbackCron();
+
+    expect(prisma.localCalendar.update).not.toHaveBeenCalled();
+    expect(trigger).toHaveBeenCalledTimes(2);
   });
 
   it('formats the reminder time in APP_TIMEZONE', async () => {

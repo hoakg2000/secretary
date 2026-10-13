@@ -34,7 +34,7 @@ Validated at startup by `server/src/config/env.validation.ts`. Template: `server
 | `BULLMQ_CONCURRENCY` | `3` | Email worker concurrency |
 | `CALENDAR_SYNC_CRON` | every 5 minutes | Calendar push-sync schedule (6-field cron expression) |
 | `APP_TIMEZONE` | `Asia/Ho_Chi_Minh` | Reminder text, chat system instruction. Stored times are UTC. |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | Reserved for Telegram delivery (planned, not read yet) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | Telegram text delivery of proactive notifications. Without both, the dispatch status is `NOT_CONFIGURED` and nothing is sent. |
 
 ## Seed only
 

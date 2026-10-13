@@ -8,9 +8,10 @@ import {
   ProactiveTriggerType,
   TriggerProactiveDto,
 } from './dto/trigger-proactive.dto';
+import { TelegramClient, TelegramSendStatus } from './telegram.client';
 
-// LOGGED: chưa có kênh gửi thật, thông báo mới chỉ được ghi log. Sẽ có 'SENT' khi tích hợp Telegram (plan 6.1)
-export type ProactiveDispatchStatus = 'LOGGED';
+// SENT: Telegram nhận (HTTP 200). FAILED: gọi Telegram lỗi. NOT_CONFIGURED: thiếu bot token hoặc chat ID
+export type ProactiveDispatchStatus = TelegramSendStatus;
 
 @Injectable()
 export class ProactiveService {
@@ -19,6 +20,7 @@ export class ProactiveService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly telegramClient: TelegramClient,
   ) {}
 
   /**
@@ -41,7 +43,7 @@ export class ProactiveService {
 
     return {
       // Chỉ true khi thông báo thực sự tới được người dùng
-      success: (sendResult.status as string) === 'SENT',
+      success: sendResult.status === 'SENT',
       channel: notificationPayload.channel,
       payload: notificationPayload,
       result: sendResult,
@@ -49,7 +51,7 @@ export class ProactiveService {
   }
 
   /**
-   * Điều phối gửi thông báo đến các kênh (Telegram / Push Notification). Hiện chỉ ghi log.
+   * Gửi thông báo qua Telegram (kênh duy nhất hiện có).
    */
   private async dispatchNotification(payload: {
     type: ProactiveTriggerType;
@@ -58,11 +60,12 @@ export class ProactiveService {
     metadata: Record<string, any>;
     timestamp: string;
   }): Promise<{ status: ProactiveDispatchStatus; at: string }> {
+    const status = await this.telegramClient.sendMessage(payload.message);
     this.logger.log(
-      `[${payload.channel}] (chưa cấu hình kênh gửi) Proactive message: "${payload.message}"`,
+      `[${payload.channel}] ${status} Proactive message: "${payload.message}"`,
     );
 
-    return { status: 'LOGGED', at: new Date().toISOString() };
+    return { status, at: new Date().toISOString() };
   }
 
   /**
@@ -96,12 +99,14 @@ export class ProactiveService {
       this.logger.log(
         `[Cron Remind] Upcoming event found: "${event.title}" at ${event.startTime.toISOString()}`,
       );
-      await this.evaluateAndTrigger({
+      const { success } = await this.evaluateAndTrigger({
         type: ProactiveTriggerType.SCHEDULED_REMINDER,
         message: `Nhắc nhở lịch trình: Sắp tới cuộc hẹn "${event.title}" lúc ${event.startTime.toLocaleTimeString('vi-VN', { timeZone })}`,
         channel: ProactiveChannel.TELEGRAM,
         metadata: { eventId: event.id, title: event.title },
       });
+      // Gửi chưa thành công thì không đánh dấu: lượt cron sau sẽ thử lại
+      if (!success) continue;
       await this.prisma.localCalendar.update({
         where: { id: event.id },
         data: { remindedAt: new Date() },
@@ -116,7 +121,7 @@ export class ProactiveService {
   @AiTool({
     name: 'send_proactive_notification',
     description:
-      'Chủ động gửi thông báo / tin nhắn nhắc nhở trực tiếp cho người dùng qua Telegram hoặc Push Notification khi có sự kiện khẩn cấp hoặc tin nhắn cần chú ý.',
+      'Chủ động gửi thông báo / tin nhắn nhắc nhở trực tiếp cho người dùng qua Telegram khi có sự kiện khẩn cấp hoặc tin nhắn cần chú ý.',
     dto: TriggerProactiveDto,
     requiresConfirmation: true,
     parameters: {
@@ -139,8 +144,8 @@ export class ProactiveService {
       },
       channel: {
         type: 'string',
-        description: 'Kênh gửi: TELEGRAM, PUSH_NOTIFICATION, hoặc ALL',
-        enum: ['TELEGRAM', 'PUSH_NOTIFICATION', 'ALL'],
+        description: 'Kênh gửi: TELEGRAM',
+        enum: ['TELEGRAM'],
         required: false,
       },
     },

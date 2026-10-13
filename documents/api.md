@@ -122,7 +122,7 @@ AI tools (confirmation = not executed inside the chat):
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/proactive/trigger` | JWT | `{ type, message, channel?, metadata? }`. No delivery channel exists yet: `data.result.status` is `LOGGED` and `data.success` is `false`. |
+| POST | `/proactive/trigger` | JWT | `{ type, message, channel?, metadata? }`. Sends `message` as Telegram text (`channel` is `TELEGRAM` only). `data.result.status` is `SENT`, `FAILED` or `NOT_CONFIGURED` (bot token or chat ID missing); `data.success` is `true` only for `SENT`. |
 
 ## Other
 
