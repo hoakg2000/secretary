@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AiTool } from '../../common/decorators/ai-tool.decorator';
+import { SaveMemoryDto } from '../dto/save-memory.dto';
+import { SearchMemoryDto } from '../dto/search-memory.dto';
 import { MemoryService } from '../services/memory/memory.service';
 
 @Injectable()
@@ -12,6 +14,7 @@ export class MemoryTools {
     name: 'search_semantic_memory',
     description:
       'Tra cứu bộ nhớ ngữ nghĩa của AI về thông tin, thói quen, sở thích, sự kiện hoặc chi tiết cá nhân của người dùng.',
+    dto: SearchMemoryDto,
     parameters: {
       query: {
         type: 'string',
@@ -31,25 +34,16 @@ export class MemoryTools {
       },
     },
   })
-  async searchSemanticMemory(params: {
-    query: string;
-    category?: string;
-    limit?: number;
-  }) {
-    this.logger.log(
-      `[AiTool: search_semantic_memory] Query: "${params.query}"`,
-    );
-    return this.memoryService.searchMemory({
-      query: params.query,
-      category: params.category,
-      limit: params.limit || 5,
-    });
+  async searchSemanticMemory(dto: SearchMemoryDto) {
+    this.logger.log(`[AiTool: search_semantic_memory] Query: "${dto.query}"`);
+    return this.memoryService.searchMemory(dto);
   }
 
   @AiTool({
     name: 'save_user_memory',
     description:
       'Lưu thông tin mới, sở thích, thói quen hoặc dữ liệu quan trọng của người dùng vào bộ nhớ AI dài hạn.',
+    dto: SaveMemoryDto,
     parameters: {
       content: {
         type: 'string',
@@ -69,17 +63,13 @@ export class MemoryTools {
       },
     },
   })
-  async saveUserMemory(params: {
-    content: string;
-    category?: string;
-    initialScore?: number;
-  }) {
-    this.logger.log(`[AiTool: save_user_memory] Content: "${params.content}"`);
+  async saveUserMemory(dto: SaveMemoryDto) {
+    this.logger.log(`[AiTool: save_user_memory] Content: "${dto.content}"`);
     return this.memoryService.saveMemory({
-      content: params.content,
-      category: params.category || 'GENERAL',
-      source: 'CHAT',
-      initialScore: params.initialScore ?? 1.0,
+      content: dto.content,
+      category: dto.category || 'GENERAL',
+      source: 'CHAT', // nguồn và decay do server quyết định, không lấy từ model
+      initialScore: dto.initialScore ?? 1.0,
       decayFactor: 0.01,
     });
   }
