@@ -1,8 +1,9 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AiAgentModule } from './ai-agent/ai-agent.module';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
@@ -10,6 +11,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { CalendarModule } from './calendar/calendar.module';
 import { CharacterModule } from './character/character.module';
+import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { validate } from './config/env.validation';
 import { EmailModule } from './email/email.module';
 import { FinanceModule } from './finance/finance.module';
@@ -23,6 +25,8 @@ import { ProactiveModule } from './proactive/proactive.module';
       validate,
     }),
     ScheduleModule.forRoot(),
+    // Chỉ áp dụng ở route gắn ThrottlerGuard (đăng nhập): 5 lần / phút / IP
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 5 }]),
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -43,7 +47,11 @@ import { ProactiveModule } from './proactive/proactive.module';
     ProactiveModule,
   ],
   controllers: [AppController],
-  // Mọi route đều yêu cầu JWT, trừ route gắn @Public()
-  providers: [AppService, { provide: APP_GUARD, useClass: JwtAuthGuard }],
+  providers: [
+    AppService,
+    // Mọi route đều yêu cầu JWT, trừ route gắn @Public()
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_FILTER, useClass: PrismaExceptionFilter },
+  ],
 })
 export class AppModule {}

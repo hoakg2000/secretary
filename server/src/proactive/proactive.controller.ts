@@ -16,7 +16,7 @@ import { ProactiveService } from './proactive.service';
 
 @ApiTags('Proactive Agent')
 @ApiBearerAuth('JWT-auth')
-@Controller('api/v1/proactive')
+@Controller('proactive')
 export class ProactiveController {
   constructor(private readonly proactiveService: ProactiveService) {}
 

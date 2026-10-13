@@ -32,7 +32,7 @@ import { TtsService } from './services/tts/tts.service';
 
 @ApiTags('AI Agent & Memory')
 @ApiBearerAuth('JWT-auth')
-@Controller('api/v1/ai-agent')
+@Controller('ai-agent')
 export class AiAgentController {
   constructor(
     private readonly memoryService: MemoryService,

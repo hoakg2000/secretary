@@ -33,7 +33,7 @@ describe('AiAgentController POST chat/stream (SSE)', () => {
 
   it('streams data frames for a POST with a JSON body', async () => {
     const res = await request(app.getHttpServer())
-      .post('/api/v1/ai-agent/chat/stream')
+      .post('/ai-agent/chat/stream')
       .send({ message: 'xin chào', history: [{ role: 'user', text: 'Tên tôi là Hoa' }] });
 
     expect(res.headers['content-type']).toContain('text/event-stream');
@@ -44,16 +44,16 @@ describe('AiAgentController POST chat/stream (SSE)', () => {
 
   it('rejects a body without a message and an oversized history', async () => {
     await request(app.getHttpServer())
-      .post('/api/v1/ai-agent/chat/stream')
+      .post('/ai-agent/chat/stream')
       .send({})
       .expect(400);
     await request(app.getHttpServer())
-      .post('/api/v1/ai-agent/chat/stream')
+      .post('/ai-agent/chat/stream')
       .send({ message: 'x', history: Array(21).fill({ role: 'user', text: 'a' }) })
       .expect(400);
   });
 
   it('is not registered as GET any more', async () => {
-    await request(app.getHttpServer()).get('/api/v1/ai-agent/chat/stream').expect(404);
+    await request(app.getHttpServer()).get('/ai-agent/chat/stream').expect(404);
   });
 });

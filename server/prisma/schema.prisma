@@ -41,6 +41,7 @@ model UserSession {
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   refreshTokens RefreshToken[]
 
+  @@index([userId])
   @@map("user_sessions")
 }
 
@@ -57,6 +58,7 @@ model RefreshToken {
   session   UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
+  @@index([userId])
   @@map("refresh_tokens")
 }
 
@@ -118,6 +120,7 @@ model EmailLog {
 
   transactions Transaction[]
 
+  @@index([status])
   @@map("email_logs")
 }
 
@@ -200,6 +203,8 @@ model Transaction {
   category        Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   emailLog        EmailLog?       @relation(fields: [emailLogId], references: [id], onDelete: SetNull)
 
+  @@index([accountId, transactionTime])
+  @@index([categoryId])
   @@map("transactions")
 }
 
@@ -233,6 +238,7 @@ model LocalCalendar {
 
   syncState      CalendarSyncState?
 
+  @@index([startTime])
   @@map("local_calendars")
 }
 
@@ -254,6 +260,7 @@ model CalendarSyncState {
 
   localEvent    LocalCalendar @relation(fields: [localEventId], references: [id], onDelete: Cascade)
 
+  @@index([syncStatus])
   @@map("calendar_sync_states")
 }
 

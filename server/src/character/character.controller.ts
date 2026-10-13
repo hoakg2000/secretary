@@ -22,7 +22,7 @@ import { UpdatePersonaDto } from './dto/update-persona.dto';
 
 @ApiTags('Characters & Personas')
 @ApiBearerAuth('JWT-auth')
-@Controller('api/v1/characters')
+@Controller('characters')
 export class CharacterController {
   constructor(private readonly characterService: CharacterService) {}
 

@@ -24,7 +24,7 @@ import { UpdateEventDto } from './dto/update-event.dto';
 
 @ApiTags('Calendar')
 @ApiBearerAuth('JWT-auth')
-@Controller('api/v1/calendar')
+@Controller('calendar')
 export class CalendarController {
   constructor(
     private readonly calendarService: CalendarService,

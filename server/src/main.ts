@@ -2,12 +2,16 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  app.use(helmet());
   app.use(cookieParser());
+  // Mọi controller nằm dưới /api/v1 (trừ GET /). Cookie refresh token dùng path /api/v1/auth
+  app.setGlobalPrefix('api/v1', { exclude: ['/'] });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

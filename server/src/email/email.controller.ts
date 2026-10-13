@@ -23,7 +23,7 @@ import { EmailService } from './email.service';
 
 @ApiTags('Email & Rules')
 @ApiBearerAuth('JWT-auth')
-@Controller('api/v1')
+@Controller()
 export class EmailController {
   constructor(
     private readonly emailService: EmailService,

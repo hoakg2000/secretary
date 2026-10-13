@@ -30,7 +30,7 @@ import { FinanceService } from './finance.service';
 
 @ApiTags('Finance')
 @ApiBearerAuth('JWT-auth')
-@Controller('api/v1/finance')
+@Controller('finance')
 export class FinanceController {
   constructor(private readonly financeService: FinanceService) {}
 

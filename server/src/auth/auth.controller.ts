@@ -8,7 +8,9 @@ import {
   Query,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -25,7 +27,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 const REFRESH_COOKIE = 'refreshToken';
 const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
-@Controller('api/v1/auth')
+@Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
@@ -49,7 +51,9 @@ export class AuthController {
     status: 401,
     description: 'Email hoặc mật khẩu không chính xác',
   })
+  @ApiResponse({ status: 429, description: 'Quá 5 lần đăng nhập mỗi phút' })
   @Public()
+  @UseGuards(ThrottlerGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -58,10 +62,9 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const userAgent = req.headers['user-agent'];
-    const ipAddress =
-      (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
 
-    const result = await this.authService.login(loginDto, userAgent, ipAddress);
+    // req.ip: không tin header x-forwarded-for do client tự gửi (chỉ đúng sau proxy khi bật 'trust proxy')
+    const result = await this.authService.login(loginDto, userAgent, req.ip);
 
     this.setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);
 
