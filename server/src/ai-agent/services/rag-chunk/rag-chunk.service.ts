@@ -3,6 +3,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MemoryService } from '../memory/memory.service';
 
+/**
+ * Kept by decision D7. Not called from anywhere and nothing reads rag_chunks yet.
+ * syncEmailToMemory stores the raw email body in ai_memories: do not call it from the email worker
+ * until the rule in next-steps.md section 6.3 is met (summary only, source excluded from pre-turn retrieval).
+ */
 @Injectable()
 export class RagChunkService {
   private readonly logger = new Logger(RagChunkService.name);

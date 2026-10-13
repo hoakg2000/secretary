@@ -32,6 +32,7 @@ model User {
 model UserSession {
   id          String    @id @default(uuid())
   userId      String    @map("user_id")
+  // Kept by decision D14 for future multi-user / multi-device support. Never written today.
   deviceId    String?   @map("device_id")
   ipAddress   String?   @map("ip_address")
   userAgent   String?   @map("user_agent")
@@ -149,6 +150,7 @@ model EmailRule {
   @@map("email_rules")
 }
 
+// Kept by decision D11. Unused: BullMQ keeps job state in Redis.
 model QueueJob {
   id           String   @id @default(uuid())
   jobId        String   @unique @map("job_id")
@@ -281,23 +283,10 @@ model AiMemory {
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
-  decayLogs      MemoryDecayLog[]
-
   @@map("ai_memories")
 }
 
-model MemoryDecayLog {
-  id             String    @id @default(uuid())
-  memoryId       String    @map("memory_id")
-  oldScore       Float     @map("old_score")
-  newScore       Float     @map("new_score")
-  decayTimestamp DateTime  @default(now()) @map("decay_timestamp")
-
-  memory         AiMemory  @relation(fields: [memoryId], references: [id], onDelete: Cascade)
-
-  @@map("memory_decay_logs")
-}
-
+// Kept by decision D7. Not called from anywhere and nothing reads rag_chunks yet (see RagChunkService).
 model RagChunk {
   id        String   @id @default(uuid())
   sourceId  String?  @map("source_id")
