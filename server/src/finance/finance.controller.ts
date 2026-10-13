@@ -6,17 +6,21 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseBoolPipe,
+  ParseEnumPipe,
   Patch,
   Post,
-  UseGuards,
+  Query,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TransactionType } from '@prisma/client';
+import { AdjustBalanceDto } from './dto/adjust-balance.dto';
 import { CreateBankAccountDto } from './dto/create-bank-account.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
@@ -26,7 +30,6 @@ import { FinanceService } from './finance.service';
 
 @ApiTags('Finance')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
 @Controller('api/v1/finance')
 export class FinanceController {
   constructor(private readonly financeService: FinanceService) {}
@@ -48,12 +51,19 @@ export class FinanceController {
     };
   }
 
-  @ApiOperation({ summary: 'Lấy danh sách tất cả tài khoản ngân hàng' })
+  @ApiOperation({
+    summary:
+      'Lấy danh sách tài khoản ngân hàng (mặc định chỉ tài khoản đang hoạt động)',
+  })
+  @ApiQuery({ name: 'includeInactive', type: Boolean, required: false })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @Get('accounts')
   @HttpCode(HttpStatus.OK)
-  async getAllBankAccounts() {
-    const data = await this.financeService.getAllBankAccounts();
+  async getAllBankAccounts(
+    @Query('includeInactive', new ParseBoolPipe({ optional: true }))
+    includeInactive?: boolean,
+  ) {
+    const data = await this.financeService.getAllBankAccounts(includeInactive);
     return {
       statusCode: HttpStatus.OK,
       message: 'Lấy danh sách tài khoản ngân hàng thành công',
@@ -104,7 +114,27 @@ export class FinanceController {
     };
   }
 
-  @ApiOperation({ summary: 'Xóa tài khoản ngân hàng' })
+  @ApiOperation({
+    summary:
+      'Điều chỉnh số dư thủ công (ghi chênh lệch thành một giao dịch điều chỉnh)',
+  })
+  @ApiResponse({ status: 200, description: 'Điều chỉnh số dư thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy tài khoản' })
+  @Patch('accounts/:id/balance')
+  @HttpCode(HttpStatus.OK)
+  async adjustBalance(@Param('id') id: string, @Body() dto: AdjustBalanceDto) {
+    const data = await this.financeService.adjustBalance(id, dto);
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Điều chỉnh số dư thành công',
+      data,
+    };
+  }
+
+  @ApiOperation({
+    summary:
+      'Xóa tài khoản ngân hàng (đã có giao dịch thì chỉ chuyển sang ngừng hoạt động)',
+  })
   @ApiResponse({ status: 200, description: 'Xóa tài khoản thành công' })
   @Delete('accounts/:id')
   @HttpCode(HttpStatus.OK)
@@ -136,10 +166,14 @@ export class FinanceController {
 
   @ApiOperation({ summary: 'Lấy danh sách danh mục thu/chi' })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
+  @ApiQuery({ name: 'type', enum: TransactionType, required: false })
   @Get('categories')
   @HttpCode(HttpStatus.OK)
-  async getAllCategories() {
-    const data = await this.financeService.getAllCategories();
+  async getAllCategories(
+    @Query('type', new ParseEnumPipe(TransactionType, { optional: true }))
+    type?: TransactionType,
+  ) {
+    const data = await this.financeService.getAllCategories(type);
     return {
       statusCode: HttpStatus.OK,
       message: 'Lấy danh sách danh mục thành công',
@@ -179,7 +213,9 @@ export class FinanceController {
     };
   }
 
-  @ApiOperation({ summary: 'Lọc và lấy danh sách giao dịch tài chính' })
+  @ApiOperation({
+    summary: 'Lọc và lấy danh sách giao dịch tài chính (phân trang)',
+  })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @Post('transactions/search')
   @HttpCode(HttpStatus.OK)

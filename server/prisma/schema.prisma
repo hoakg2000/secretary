@@ -194,10 +194,10 @@ model Transaction {
   counterparty    String?
   note            String?         @db.Text
   transactionTime DateTime        @map("transaction_time")
-  emailLogId      String?         @map("email_log_id")
+  emailLogId      String?         @unique @map("email_log_id")
   createdAt       DateTime        @default(now()) @map("created_at")
 
-  account         BankAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  account         BankAccount     @relation(fields: [accountId], references: [id], onDelete: Restrict)
   category        Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   emailLog        EmailLog?       @relation(fields: [emailLogId], references: [id], onDelete: SetNull)
 
