@@ -21,7 +21,7 @@ import { UpdateCharacterDto } from './dto/update-character.dto';
 import { UpdatePersonaDto } from './dto/update-persona.dto';
 
 @ApiTags('Characters & Personas')
-@ApiBearerAuth()
+@ApiBearerAuth('JWT-auth')
 @Controller('api/v1/characters')
 export class CharacterController {
   constructor(private readonly characterService: CharacterService) {}
@@ -174,7 +174,7 @@ export class CharacterController {
     };
   }
 
-  @Patch('personas/:personaId')
+  @Patch(':id/personas/:personaId')
   @ApiOperation({ summary: 'Cập nhật nội dung Persona' })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -185,10 +185,12 @@ export class CharacterController {
     description: 'Không tìm thấy Persona.',
   })
   async updatePersona(
+    @Param('id') characterId: string,
     @Param('personaId') personaId: string,
     @Body() updatePersonaDto: UpdatePersonaDto,
   ) {
     const data = await this.characterService.updatePersona(
+      characterId,
       personaId,
       updatePersonaDto,
     );
@@ -199,7 +201,7 @@ export class CharacterController {
     };
   }
 
-  @Delete('personas/:personaId')
+  @Delete(':id/personas/:personaId')
   @ApiOperation({ summary: 'Xóa Persona' })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -209,8 +211,14 @@ export class CharacterController {
     status: HttpStatus.NOT_FOUND,
     description: 'Không tìm thấy Persona.',
   })
-  async removePersona(@Param('personaId') personaId: string) {
-    const data = await this.characterService.removePersona(personaId);
+  async removePersona(
+    @Param('id') characterId: string,
+    @Param('personaId') personaId: string,
+  ) {
+    const data = await this.characterService.removePersona(
+      characterId,
+      personaId,
+    );
     return {
       statusCode: HttpStatus.OK,
       message: 'Xóa Persona thành công',

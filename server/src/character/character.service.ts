@@ -11,17 +11,20 @@ export class CharacterService {
 
   // ==================== CHARACTER LOGIC ====================
 
+  // Bỏ kích hoạt + ghi phải nằm trong một transaction: DB chỉ cho phép một Character active (partial unique index)
   async createCharacter(dto: CreateCharacterDto) {
-    if (dto.isActive) {
-      await this.prisma.character.updateMany({
-        where: { isActive: true },
-        data: { isActive: false },
-      });
-    }
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.isActive) {
+        await tx.character.updateMany({
+          where: { isActive: true },
+          data: { isActive: false },
+        });
+      }
 
-    return this.prisma.character.create({
-      data: dto,
-      include: { personas: true },
+      return tx.character.create({
+        data: dto,
+        include: { personas: true },
+      });
     });
   }
 
@@ -48,17 +51,19 @@ export class CharacterService {
   async updateCharacter(id: string, dto: UpdateCharacterDto) {
     await this.findCharacterById(id);
 
-    if (dto.isActive) {
-      await this.prisma.character.updateMany({
-        where: { id: { not: id }, isActive: true },
-        data: { isActive: false },
-      });
-    }
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.isActive) {
+        await tx.character.updateMany({
+          where: { id: { not: id }, isActive: true },
+          data: { isActive: false },
+        });
+      }
 
-    return this.prisma.character.update({
-      where: { id },
-      data: dto,
-      include: { personas: true },
+      return tx.character.update({
+        where: { id },
+        data: dto,
+        include: { personas: true },
+      });
     });
   }
 
@@ -73,14 +78,17 @@ export class CharacterService {
   async setActiveCharacter(id: string) {
     await this.findCharacterById(id);
 
-    await this.prisma.character.updateMany({
-      data: { isActive: false },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      await tx.character.updateMany({
+        where: { id: { not: id }, isActive: true },
+        data: { isActive: false },
+      });
 
-    return this.prisma.character.update({
-      where: { id },
-      data: { isActive: true },
-      include: { personas: true },
+      return tx.character.update({
+        where: { id },
+        data: { isActive: true },
+        include: { personas: true },
+      });
     });
   }
 
@@ -97,9 +105,10 @@ export class CharacterService {
     });
   }
 
-  async updatePersona(personaId: string, dto: UpdatePersonaDto) {
-    const persona = await this.prisma.persona.findUnique({
-      where: { id: personaId },
+  // Persona phải thuộc đúng Character trên URL
+  private async findPersona(characterId: string, personaId: string) {
+    const persona = await this.prisma.persona.findFirst({
+      where: { id: personaId, characterId },
     });
 
     if (!persona) {
@@ -107,6 +116,16 @@ export class CharacterService {
         `Không tìm thấy Persona với ID: ${personaId}`,
       );
     }
+
+    return persona;
+  }
+
+  async updatePersona(
+    characterId: string,
+    personaId: string,
+    dto: UpdatePersonaDto,
+  ) {
+    await this.findPersona(characterId, personaId);
 
     return this.prisma.persona.update({
       where: { id: personaId },
@@ -114,16 +133,8 @@ export class CharacterService {
     });
   }
 
-  async removePersona(personaId: string) {
-    const persona = await this.prisma.persona.findUnique({
-      where: { id: personaId },
-    });
-
-    if (!persona) {
-      throw new NotFoundException(
-        `Không tìm thấy Persona với ID: ${personaId}`,
-      );
-    }
+  async removePersona(characterId: string, personaId: string) {
+    await this.findPersona(characterId, personaId);
 
     return this.prisma.persona.delete({
       where: { id: personaId },
