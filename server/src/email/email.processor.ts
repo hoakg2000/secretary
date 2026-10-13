@@ -1,6 +1,7 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
-import { EmailMatcher, EmailRuleType, EmailStatus } from '@prisma/client';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
+import { Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { EmailRuleType, EmailStatus } from '@prisma/client';
 import { Job } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -10,122 +11,87 @@ export interface ProcessEmailJobData {
   sender: string;
   subject?: string;
   rawBody?: string;
+  // Đã phân loại lúc tiếp nhận (EmailService.ingest); blacklist không bao giờ tới đây
+  ruleType: EmailRuleType | null;
 }
 
 @Processor('email-processing')
-export class EmailProcessor extends WorkerHost {
+export class EmailProcessor
+  extends WorkerHost
+  implements OnApplicationBootstrap
+{
   private readonly logger = new Logger(EmailProcessor.name);
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {
     super();
   }
 
+  // Không đọc process.env trong @Processor(): decorator chạy lúc import, trước khi ConfigModule nạp .env
+  onApplicationBootstrap() {
+    this.worker.concurrency = Number(
+      this.configService.get('BULLMQ_CONCURRENCY', 3),
+    );
+  }
+
   async process(job: Job<ProcessEmailJobData>): Promise<any> {
-    const { emailLogId, sender, subject, rawBody } = job.data;
+    const { emailLogId, ruleType } = job.data;
     this.logger.log(`[Job ${job.id}] Đang xử lý email log ID: ${emailLogId}`);
 
-    try {
-      // 1. Lấy tất cả các quy tắc lọc email đang hoạt động
-      const rules = await this.prisma.emailRule.findMany({
-        where: { isActive: true },
-        orderBy: { createdAt: 'asc' },
-      });
+    let finalStatus: EmailStatus = EmailStatus.SKIPPED;
 
-      // 2. Tìm quy tắc trùng khớp đầu tiên
-      let matchedRuleType: EmailRuleType | null = null;
-
-      for (const rule of rules) {
-        if (this.isMatched(rule, sender, subject, rawBody)) {
-          matchedRuleType = rule.type;
-          this.logger.log(
-            `[Job ${job.id}] Khớp quy tắc (${rule.type}): ${rule.matchValue}`,
-          );
-          break;
-        }
-      }
-
-      // 3. Xử lý dựa trên quy tắc khớp
-      let finalStatus: EmailStatus = EmailStatus.SKIPPED;
-
-      if (matchedRuleType === EmailRuleType.blacklist) {
-        finalStatus = EmailStatus.SKIPPED;
-        this.logger.warn(
-          `[Job ${job.id}] Email bị bỏ qua do nằm trong Blacklist`,
-        );
-      } else if (matchedRuleType === EmailRuleType.moneylist) {
-        finalStatus = EmailStatus.PROCESSED;
-        this.logger.log(
-          `[Job ${job.id}] Email phân loại Moneylist -> Sẵn sàng trích xuất giao dịch tài chính`,
-        );
-        // TODO: Gọi hook hoặc bắn event tới Finance Module ở Bước 4
-      } else if (matchedRuleType === EmailRuleType.whitelist) {
-        finalStatus = EmailStatus.PROCESSED;
-        this.logger.log(
-          `[Job ${job.id}] Email phân loại Whitelist -> Sẵn sàng trích xuất thông tin lịch/tóm tắt`,
-        );
-        // TODO: Gọi AI extraction hoặc lưu vào AI Memory ở Bước 6
-      } else {
-        this.logger.log(
-          `[Job ${job.id}] Email không khớp với quy tắc nào -> Đặt trạng thái SKIPPED`,
-        );
-      }
-
-      // 4. Cập nhật trạng thái vào bảng email_logs
-      await this.prisma.emailLog.update({
-        where: { id: emailLogId },
-        data: { status: finalStatus },
-      });
-
-      return { success: true, emailLogId, status: finalStatus };
-    } catch (error: any) {
-      this.logger.error(
-        `[Job ${job.id}] Xử lý email thất bại: ${error.message}`,
-        error.stack,
+    if (ruleType === EmailRuleType.moneylist) {
+      finalStatus = EmailStatus.PROCESSED;
+      this.logger.log(
+        `[Job ${job.id}] Email phân loại Moneylist -> Sẵn sàng trích xuất giao dịch tài chính`,
       );
-
-      await this.prisma.emailLog.update({
-        where: { id: emailLogId },
-        data: { status: EmailStatus.FAILED },
-      });
-
-      throw error;
+      // TODO: trích xuất giao dịch bằng AI (plan 6.3)
+    } else if (ruleType === EmailRuleType.whitelist) {
+      finalStatus = EmailStatus.PROCESSED;
+      this.logger.log(
+        `[Job ${job.id}] Email phân loại Whitelist -> Sẵn sàng trích xuất thông tin lịch/tóm tắt`,
+      );
+      // TODO: phân loại / tóm tắt bằng AI (plan 6.3)
+    } else {
+      this.logger.log(
+        `[Job ${job.id}] Email không khớp với quy tắc nào -> Đặt trạng thái SKIPPED`,
+      );
     }
+
+    await this.prisma.emailLog.update({
+      where: { id: emailLogId },
+      data: { status: finalStatus },
+    });
+
+    return { success: true, emailLogId, status: finalStatus };
   }
 
   /**
-   * Helper kiểm tra giá trị email có khớp với Rule hay không
+   * Chỉ đánh dấu FAILED khi đã hết số lần retry. Lỗi của chính bước ghi DB này chỉ được log,
+   * không che mất lỗi gốc của job.
    */
-  private isMatched(
-    rule: { matcher: EmailMatcher; matchValue: string },
-    sender: string,
-    subject?: string,
-    rawBody?: string,
-  ): boolean {
-    const { matcher, matchValue } = rule;
-    const targetText = matchValue.toLowerCase();
+  @OnWorkerEvent('failed')
+  async onFailed(job: Job<ProcessEmailJobData> | undefined, error: Error) {
+    if (!job) return;
 
-    switch (matcher) {
-      case EmailMatcher.sender:
-        return sender.toLowerCase().includes(targetText);
+    this.logger.error(
+      `[Job ${job.id}] Xử lý email thất bại (lần ${job.attemptsMade}): ${error.message}`,
+      error.stack,
+    );
 
-      case EmailMatcher.keyword: {
-        const fullContent = `${subject || ''} ${rawBody || ''}`.toLowerCase();
-        return fullContent.includes(targetText);
-      }
+    if (job.attemptsMade < (job.opts.attempts ?? 1)) return;
 
-      case EmailMatcher.regex: {
-        try {
-          const regex = new RegExp(matchValue, 'i');
-          const fullContent = `${sender} ${subject || ''} ${rawBody || ''}`;
-          return regex.test(fullContent);
-        } catch (e) {
-          this.logger.error(`Regex không hợp lệ: ${matchValue}`);
-          return false;
-        }
-      }
-
-      default:
-        return false;
+    try {
+      await this.prisma.emailLog.update({
+        where: { id: job.data.emailLogId },
+        data: { status: EmailStatus.FAILED },
+      });
+    } catch (updateError: any) {
+      this.logger.error(
+        `[Job ${job.id}] Không cập nhật được trạng thái FAILED: ${updateError.message}`,
+      );
     }
   }
 }

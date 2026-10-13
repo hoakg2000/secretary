@@ -113,7 +113,6 @@ model EmailLog {
   sender       String
   subject      String?
   rawBody      String?       @map("raw_body") @db.Text
-  dedupHash    String        @unique @map("dedup_hash")
   status       EmailStatus   @default(PENDING)
   createdAt    DateTime      @default(now()) @map("created_at")
 

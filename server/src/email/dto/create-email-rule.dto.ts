@@ -1,6 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { EmailMatcher, EmailRuleType } from '@prisma/client';
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
 export class CreateEmailRuleDto {
   @ApiProperty({
@@ -36,4 +42,13 @@ export class CreateEmailRuleDto {
   @IsString()
   @IsOptional()
   description?: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    default: true,
+    description: 'Bật/tắt quy tắc',
+  })
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
 }

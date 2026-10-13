@@ -1,4 +1,3 @@
-import { InjectQueue } from '@nestjs/bullmq';
 import {
   Body,
   Controller,
@@ -9,7 +8,6 @@ import {
   Param,
   Patch,
   Post,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -17,8 +15,6 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Queue } from 'bullmq';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateEmailRuleDto } from './dto/create-email-rule.dto';
 import { EmailWebhookDto } from './dto/email-webhook.dto';
 import { UpdateEmailRuleDto } from './dto/update-email-rule.dto';
@@ -26,36 +22,33 @@ import { EmailRuleService } from './email-rule.service';
 import { EmailService } from './email.service';
 
 @ApiTags('Email & Rules')
+@ApiBearerAuth('JWT-auth')
 @Controller('api/v1')
 export class EmailController {
   constructor(
     private readonly emailService: EmailService,
     private readonly emailRuleService: EmailRuleService,
-    @InjectQueue('email-processing') private readonly emailQueue: Queue,
   ) {}
 
   // ==========================================
-  // WEBHOOK INGESTION
+  // MANUAL INGESTION
   // ==========================================
 
   @ApiOperation({
-    summary: 'Đón Webhook nhận email mới từ Google Pub/Sub hoặc Trigger Manual',
+    summary:
+      'Nạp thủ công một email đã phân tích sẵn (cần JWT). Đây không phải webhook Google Pub/Sub',
   })
   @ApiResponse({
     status: 200,
-    description: 'Email đã được ghi nhận và đưa vào hàng đợi xử lý ngầm',
+    description:
+      'Email được ghi nhận: blacklist -> SKIPPED, còn lại -> đưa vào hàng đợi. Email trùng Message-ID trả về data null',
   })
-  @ApiResponse({
-    status: 409,
-    description: 'Email trùng lặp (Idempotent check failed)',
-  })
-  @Post('email/webhook')
+  @Post('email/ingest')
   @HttpCode(HttpStatus.OK)
-  async handleEmailWebhook(@Body() dto: EmailWebhookDto) {
-    // 1. Lưu EmailLog với trạng thái PENDING và kiểm tra trùng lặp (dedupHash)
-    const emailLog = await this.emailService.createEmailLog(dto);
+  async ingestEmail(@Body() dto: EmailWebhookDto) {
+    const result = await this.emailService.ingest(dto);
 
-    if (!emailLog) {
+    if (!result) {
       return {
         statusCode: HttpStatus.OK,
         message: 'Email đã tồn tại trong hệ thống (bỏ qua xử lý trùng lặp)',
@@ -63,22 +56,12 @@ export class EmailController {
       };
     }
 
-    // 2. Đẩy Job vào hàng đợi BullMQ để Worker tự động xử lý
-    const job = await this.emailQueue.add('process-email-job', {
-      emailLogId: emailLog.id,
-      messageId: emailLog.messageId,
-      sender: emailLog.sender,
-      subject: emailLog.subject,
-      rawBody: emailLog.rawBody,
-    });
-
     return {
       statusCode: HttpStatus.OK,
-      message: 'Đã tiếp nhận email và đẩy vào hàng đợi xử lý',
-      data: {
-        emailLogId: emailLog.id,
-        jobId: job.id,
-      },
+      message: result.jobId
+        ? 'Đã tiếp nhận email và đẩy vào hàng đợi xử lý'
+        : 'Đã tiếp nhận email, bỏ qua do khớp Blacklist',
+      data: result,
     };
   }
 
@@ -86,8 +69,6 @@ export class EmailController {
   // EMAIL RULES CRUD
   // ==========================================
 
-  @ApiBearerAuth('JWT-auth')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Tạo mới quy tắc lọc Email' })
   @Post('email-rules')
   @HttpCode(HttpStatus.CREATED)
@@ -100,8 +81,6 @@ export class EmailController {
     };
   }
 
-  @ApiBearerAuth('JWT-auth')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Lấy danh sách các quy tắc lọc Email' })
   @Get('email-rules')
   @HttpCode(HttpStatus.OK)
@@ -114,8 +93,6 @@ export class EmailController {
     };
   }
 
-  @ApiBearerAuth('JWT-auth')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Lấy thông tin chi tiết một quy tắc lọc Email' })
   @Get('email-rules/:id')
   @HttpCode(HttpStatus.OK)
@@ -128,8 +105,6 @@ export class EmailController {
     };
   }
 
-  @ApiBearerAuth('JWT-auth')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Cập nhật quy tắc lọc Email' })
   @Patch('email-rules/:id')
   @HttpCode(HttpStatus.OK)
@@ -142,8 +117,6 @@ export class EmailController {
     };
   }
 
-  @ApiBearerAuth('JWT-auth')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Xóa quy tắc lọc Email' })
   @Delete('email-rules/:id')
   @HttpCode(HttpStatus.OK)
