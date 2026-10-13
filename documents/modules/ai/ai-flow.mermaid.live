@@ -1,97 +1,84 @@
+%% AI agent module flow, drawn from server/src/ai-agent (2026-10-13).
+%% Change log
+%% 2026-10-13: Redrawn from the code. Removed the Email/Finance -> RagChunkService sync (never called, D7),
+%%             the text-embedding-004 model name, and the client-side layers. Added the confirmation branch
+%%             and the pre-turn memory retrieval.
+%% 2026-10-13: Added chat storage (D19, D20), Planned, task 6.4: dashed edges. Chat sessions and messages go to
+%%             relational tables; only a message the AI marks important reaches ai_memories.
 flowchart TB
-    %% DEFINITION OF SUBGRAPHS (MODULES & EXTERNAL SYSTEMS)
-    
-    subgraph Client ["Client Layer (Web / Mobile App)"]
-        UI_Chat["Chat Interface (Next.js / React Native)"]
-        UI_Audio["Audio Player"]
+    Client["Client"]
+
+    subgraph External ["External services"]
+        Gemini["Google Gemini API: gemini-2.5-flash, gemini-embedding-001"]
+        Fish["Fish.audio API"]
     end
 
-    subgraph External ["External Services / Models"]
-        GeminiAPI["Google Gemini API (gemini-2.5-flash / text-embedding-004)"]
-        FishAudio["Fish.audio API (Text-to-Speech)"]
+    subgraph Module ["AiAgentModule"]
+        Controller["AiAgentController: /api/v1/ai-agent"]
+        Agent["AgentService: chat turn, tool loop, max 5 rounds"]
+        ChatSvc["ChatSessionService - Planned"]
+        Pending["PendingActionStore: in memory, 5 minutes"]
+        MemSvc["MemoryService: hybrid search, decay at query time"]
+        MemTools["MemoryTools: search_semantic_memory, save_user_memory"]
+        OtherTools["AiTool methods of Finance, Calendar, Proactive"]
+        Tts["TtsService"]
+        Rag["RagChunkService: kept, unused"]
     end
 
-    subgraph OtherModules ["Other NestJS Modules"]
-        EmailMod["Email Module (EmailLog)"]
-        FinanceMod["Finance Module (Transaction / BankAccount)"]
-        CharMod["Character & Persona Module"]
+    subgraph Database ["PostgreSQL"]
+        DbChar[("characters, personas")]
+        DbSession[("chat_sessions - Planned")]
+        DbMessage[("chat_messages: full text, no vector - Planned")]
+        DbMemory[("ai_memories: vector 1536 + tsvector")]
     end
 
-    subgraph AIAgentModule ["AI Agent Module (src/ai-agent/)"]
-        Controller["AiAgentController (/api/v1/ai-agent)"]
-        
-        subgraph Services ["Core Services"]
-            AgentSvc["AgentService (Orchestrator / ReAct Loop)"]
-            MemSvc["MemoryService (pgvector + Hybrid Search + Decay)"]
-            RagSvc["RagChunkService (Document Splitter & Sync)"]
-            TtsSvc["TtsService (Fish.audio Integration)"]
-        end
+    %% Chat turn
+    Client -- "1. POST /chat/stream" --> Controller
+    Controller -- "2. chatStream" --> Agent
+    Agent -. "3. Planned: create or load session, check owner" .-> ChatSvc
+    ChatSvc -.-> DbSession
+    Agent -. "4. Planned: store the user message in full" .-> ChatSvc
+    ChatSvc -. "insert role USER" .-> DbMessage
+    Agent -. "5. Planned: last 20 messages as history" .-> ChatSvc
+    Agent -- "6. Persona; Planned: memory_rule" --> DbChar
+    Agent -- "7. Pre-turn retrieval, up to 5 memories" --> MemSvc
+    MemSvc -- "vector + text search" --> DbMemory
+    Agent -- "8. Prompt, history, tool declarations" --> Gemini
+    Gemini -- "9. Text chunks and function calls" --> Agent
 
-        subgraph Tools ["Tool Registry"]
-            MemTools["MemoryTools (@AiTool Decorators)"]
-            FinTools["FinanceTools / Other Module Tools (@AiTool)"]
-        end
+    %% Tool loop
+    Agent -- "10a. Read tool: run, return result" --> OtherTools
+    Agent -- "10b. Write tool: park, emit confirmation_required" --> Pending
+    Agent -- "10c. Memory tools" --> MemTools
+    MemTools --> MemSvc
 
-        subgraph Queries ["Raw Query Layer"]
-            MemQueries["MemoryQueries (Pure SQL Builder)"]
-        end
-    end
+    %% Important message -> memory
+    MemTools -- "save_user_memory: the AI marks the message important" --> MemSvc
+    MemSvc -- "embed" --> Gemini
+    MemSvc -- "insert, source CHAT" --> DbMemory
+    Agent -. "11. Planned: set memory_id on the user message" .-> ChatSvc
 
-    subgraph Database ["PostgreSQL Database (pgvector + tsvector)"]
-        DB_Memory[("ai_memories (vector 1536 + content_tsv)")]
-        DB_Rag[("rag_chunks")]
-        DB_Char[("characters & personas")]
-    end
+    %% End of turn
+    Agent -. "12. Planned: at done, store the model answer in full" .-> ChatSvc
+    ChatSvc -. "insert role MODEL" .-> DbMessage
+    Agent -- "13. SSE frames: text, tool_call, tool_result, confirmation_required, done" --> Controller
+    Controller --> Client
 
-    %% ==========================================
-    %% FLOW 1: CHAT & REACT FUNCTION CALLING LOOP (SSE)
-    %% ==========================================
-    UI_Chat -- "1. POST /chat/stream (Prompt)" --> Controller
-    Controller -- "2. Delegate Stream" --> AgentSvc
-    AgentSvc -- "3. Read System Prompt / Active Persona" --> DB_Char
-    AgentSvc -- "4. Auto-discover @AiTool() via DiscoveryService" --> Tools
-    
-    AgentSvc -- "5. Send Prompt & Tool Definitions" --> GeminiAPI
-    GeminiAPI -- "6. Return Function Call Request (e.g. search_semantic_memory)" --> AgentSvc
-    
-    AgentSvc -- "7. Execute Tool Method" --> MemTools
-    MemTools -- "8. Search Memories" --> MemSvc
-    MemSvc -- "9. Execute SQL with Vector <=> & FTS ts_rank" --> MemQueries
-    MemQueries -- "10. Query & Update last_accessed_at" --> DB_Memory
-    DB_Memory -- "11. Raw Results" --> MemSvc
-    MemSvc -- "12. Decayed & Hybrid Scored Memories" --> MemTools
-    MemTools -- "13. Tool Result Payload" --> AgentSvc
-    
-    AgentSvc -- "14. Send Function Response back to Gemini" --> GeminiAPI
-    GeminiAPI -- "15. Final Answer Generation" --> AgentSvc
-    AgentSvc -- "16. SSE Event Stream (type: text/tool_call/done)" --> Controller
-    Controller -- "17. Real-time Response Stream" --> UI_Chat
+    %% Confirmation
+    Client -- "POST /actions/:id/confirm or DELETE /actions/:id" --> Controller
+    Controller -- "confirmAction, discardAction" --> Agent
+    Agent -- "take once" --> Pending
 
-    %% ==========================================
-    %% FLOW 2: MANUAL MEMORY CRUD
-    %% ==========================================
-    UI_Chat -- "POST /memories (Save Memory)" --> Controller
+    %% Session routes
+    Client -. "Planned: GET /sessions, GET /sessions/:id/messages, DELETE /sessions/:id" .-> Controller
+    Controller -.-> ChatSvc
+
+    %% Memory routes
+    Client -- "POST, GET, DELETE /memories; POST /memories/search" --> Controller
     Controller --> MemSvc
-    MemSvc -- "Generate Embedding Vector" --> GeminiAPI
-    GeminiAPI -- "Vector (1536 dimensions)" --> MemSvc
-    MemSvc -- "Prisma Execute Raw (Update vector & tsvector)" --> MemQueries
-    MemQueries --> DB_Memory
 
-    %% ==========================================
-    %% FLOW 3: DATA SYNC & RAG CHUNKING (INTERNAL EVENT/CALLS)
-    %% ==========================================
-    EmailMod -- "Sync Processed Email" --> RagSvc
-    FinanceMod -- "Sync Financial Transaction" --> RagSvc
-    RagSvc -- "1. Save High Priority Memory" --> MemSvc
-    RagSvc -- "2. Chunk Long Text (RecursiveTextSplitter)" --> DB_Rag
-
-    %% ==========================================
-    %% FLOW 4: TEXT-TO-SPEECH (TTS)
-    %% ==========================================
-    UI_Chat -- "POST /tts (Text)" --> Controller
-    Controller --> TtsSvc
-    TtsSvc -- "Fetch Active Voice ID" --> DB_Char
-    TtsSvc -- "Request TTS MP3 Buffer" --> FishAudio
-    FishAudio -- "Audio Buffer (MP3)" --> TtsSvc
-    TtsSvc -- "Return Audio Stream" --> Controller
-    Controller -- "Audio Binary Stream" --> UI_Audio
+    %% TTS
+    Client -- "POST /tts" --> Controller
+    Controller --> Tts
+    Tts -- "active voice_id" --> DbChar
+    Tts -- "MP3 stream" --> Fish

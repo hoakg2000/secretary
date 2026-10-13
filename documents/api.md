@@ -8,6 +8,15 @@ and response shapes; this file lists what exists and who may call it.
   (`JwtAuthGuard` is global; public routes carry `@Public()`).
 - Responses are `{ statusCode, message, data }`.
 - Constraint errors: duplicate → 409, missing row → 404, bad reference → 400.
+- A route or field marked **Planned** is designed but not in the code.
+
+## Change log
+
+| Date | Change |
+|------|--------|
+| 2026-10-13 | Proactive: `POST /proactive/trigger` delivers through Telegram; statuses `SENT` / `FAILED` / `NOT_CONFIGURED` (task 6.1). |
+| 2026-10-13 | Email: new public route `POST /email/pubsub` with Google ID token check (task 6.2); every queued email is classified by the AI (task 6.3). |
+| 2026-10-13 | AI agent, **Planned** (D19, D20, task 6.4): chat sessions and full messages stored server-side. `POST /ai-agent/chat/stream` gains `sessionId` and the `session` frame and loses `history`; new routes `GET /ai-agent/sessions`, `GET /ai-agent/sessions/:id/messages`, `DELETE /ai-agent/sessions/:id`. See "Chat storage" under AI agent. |
 
 ## Auth — `/auth`
 
@@ -103,7 +112,25 @@ Planned: pull sync from Google, conflict handling.
 | POST | `/ai-agent/memories/search` | JWT | Hybrid search `{ query, category?, source?, limit? (1–20), minScore? (0–1, default 0.5) }`. |
 | POST | `/ai-agent/tts` | JWT | MP3 stream. 503 without `FISH_AUDIO_API_KEY`, 400 when no voice resolves. |
 
-Chat stream frames (`data:` lines, JSON):
+Today the server stores no chat: the client keeps the conversation and sends the recent turns in `history`.
+
+### Chat storage — Planned (D19, D20, `next-steps.md` section 6.4)
+
+The server stores every chat session and the full text of every message, both the one sent by the user and the
+one received from the model, in `chat_sessions` / `chat_messages` (`db.md` section 5). Chat is never stored in the
+vector store. Only a message the AI marks important, by the rule configured on the character, is also saved to
+`ai_memories`.
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/ai-agent/chat/stream` | JWT | Body becomes `{ message, sessionId?, characterId? }`; `history` is removed. No `sessionId` → a session is created. A `sessionId` of another user → 404, no model call. The user's message is stored before the model is called; the model's answer is stored at `done`. A turn ending in `error` stores the user's message only. |
+| GET | `/ai-agent/sessions?page=&pageSize=` | JWT | Own sessions, newest `lastMessageAt` first (`pageSize` max 50). |
+| GET | `/ai-agent/sessions/:id/messages?page=&pageSize=` | JWT | Messages of an own session, oldest first: `id`, `role` (`USER` / `MODEL`), `content`, `toolCalls`, `memoryId`, `createdAt`. |
+| DELETE | `/ai-agent/sessions/:id` | JWT | Delete an own session and its messages. Memories made from them are kept. |
+
+New first frame of every chat stream: `{ "type": "session", "sessionId": "…" }`.
+
+Chat stream frames today (`data:` lines, JSON):
 
 | `type` | Fields | Meaning |
 |--------|--------|---------|

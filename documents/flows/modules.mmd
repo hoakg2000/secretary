@@ -1,0 +1,125 @@
+flowchart LR
+  subgraph ModApp["AppModule: imports every module below"]
+    AppController["AppController: GET /"]
+    GlobalGuard["JwtAuthGuard as APP_GUARD: all routes except @Public"]
+    PrismaFilter["PrismaExceptionFilter as APP_FILTER"]
+  end
+
+  subgraph ModPrisma["PrismaModule: global"]
+    PrismaService["PrismaService: injected by every module"]
+  end
+
+  subgraph ModAuth["AuthModule"]
+    AuthController["AuthController"]
+    AuthService["AuthService"]
+    JwtStrategy["JwtStrategy"]
+    GoogleClientFactory["GoogleClientFactory"]
+  end
+
+  subgraph ModCharacter["CharacterModule"]
+    CharacterController["CharacterController"]
+    CharacterService["CharacterService"]
+  end
+
+  subgraph ModEmail["EmailModule"]
+    EmailController["EmailController"]
+    EmailService["EmailService"]
+    EmailRuleService["EmailRuleService"]
+    GmailPushService["GmailPushService: cron gmail-watch"]
+    EmailProcessor["EmailProcessor: BullMQ worker"]
+    EmailAiService["EmailAiService: one call, no tools"]
+  end
+
+  subgraph ModFinance["FinanceModule"]
+    FinanceController["FinanceController"]
+    FinanceService["FinanceService: 3 @AiTool methods"]
+  end
+
+  subgraph ModCalendar["CalendarModule"]
+    CalendarController["CalendarController"]
+    CalendarService["CalendarService"]
+    CalendarSyncService["CalendarSyncService: cron calendar-sync"]
+    CalendarTools["CalendarTools: 4 @AiTool methods"]
+  end
+
+  subgraph ModAiAgent["AiAgentModule"]
+    AiAgentController["AiAgentController"]
+    AgentService["AgentService"]
+    PendingActionStore["PendingActionStore: in-memory Map"]
+    MemoryService["MemoryService"]
+    MemoryTools["MemoryTools: 2 @AiTool methods"]
+    RagChunkService["RagChunkService: unused"]
+    TtsService["TtsService"]
+    GenAiProvider["GenAiProvider"]
+  end
+
+  subgraph ModProactive["ProactiveModule"]
+    ProactiveController["ProactiveController"]
+    ProactiveService["ProactiveService: reminder cron, 1 @AiTool method"]
+    TelegramClient["TelegramClient"]
+  end
+
+  subgraph External["External systems"]
+    Postgres[("Postgres + pgvector")]
+    Queue[["Redis / BullMQ queue email-processing"]]
+    Gemini(["Gemini"])
+    GmailApi(["Gmail API"])
+    PubSub(["Google Pub/Sub"])
+    GoogleCalendar(["Google Calendar API"])
+    Telegram(["Telegram Bot API"])
+    FishAudio(["Fish.audio"])
+  end
+
+  %% inside modules
+  AuthController --> AuthService
+  AuthService -->|"OAuth client, saveTokens"| GoogleClientFactory
+  CharacterController --> CharacterService
+  EmailController -->|"ingest"| EmailService
+  EmailController -->|"rules CRUD"| EmailRuleService
+  EmailController -->|"verifyPushToken, runPass"| GmailPushService
+  GmailPushService -->|"ingest"| EmailService
+  EmailService -->|"classify by rule"| EmailRuleService
+  EmailProcessor -->|"classify"| EmailAiService
+  FinanceController --> FinanceService
+  CalendarController --> CalendarService
+  CalendarController -->|"manual sync"| CalendarSyncService
+  CalendarTools --> CalendarService
+  AiAgentController --> AgentService
+  AiAgentController --> MemoryService
+  AiAgentController --> TtsService
+  AgentService --> PendingActionStore
+  AgentService -->|"pre-turn retrieval"| MemoryService
+  AgentService --> GenAiProvider
+  MemoryService -->|"embeddings"| GenAiProvider
+  MemoryTools --> MemoryService
+  RagChunkService --> MemoryService
+  ProactiveController --> ProactiveService
+  ProactiveService -->|"sendMessage"| TelegramClient
+
+  %% module to module
+  GlobalGuard -->|"jwt strategy"| JwtStrategy
+  GmailPushService -->|"GoogleClientFactory.forUser"| GoogleClientFactory
+  CalendarSyncService -->|"GoogleClientFactory.forUser"| GoogleClientFactory
+  EmailAiService -->|"GenAiProvider.get"| GenAiProvider
+  EmailProcessor -->|"FinanceService.createTransaction"| FinanceService
+  EmailProcessor -->|"CalendarService.createEvent"| CalendarService
+  EmailProcessor -->|"ProactiveService.evaluateAndTrigger"| ProactiveService
+
+  %% AI tool discovery: DiscoveryService scan of @AiTool methods at module init
+  AgentService -.->|"discovers @AiTool"| CalendarTools
+  AgentService -.->|"discovers @AiTool"| FinanceService
+  AgentService -.->|"discovers @AiTool"| ProactiveService
+  AgentService -.->|"discovers @AiTool"| MemoryTools
+
+  %% external systems
+  PrismaService --> Postgres
+  MemoryService -->|"pgvector queries via PrismaService"| Postgres
+  EmailService -->|"add job"| Queue
+  Queue -->|"process job"| EmailProcessor
+  GenAiProvider -->|"chat, classification, embeddings"| Gemini
+  GmailPushService -->|"watch, history.list, messages.get"| GmailApi
+  GmailApi -->|"mailbox change notification"| PubSub
+  PubSub -->|"POST /email/pubsub with Google ID token"| EmailController
+  CalendarSyncService -->|"one-way push of local events"| GoogleCalendar
+  TelegramClient -->|"sendMessage"| Telegram
+  TtsService -->|"POST /v1/tts"| FishAudio
