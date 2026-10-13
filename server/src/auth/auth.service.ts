@@ -93,8 +93,7 @@ export class AuthService {
     let payload: any;
     try {
       payload = await this.jwtService.verifyAsync(refreshTokenStr, {
-        secret:
-          this.configService.get<string>('JWT_SECRET') || 'defaultSecretKey',
+        secret: this.configService.getOrThrow<string>('JWT_SECRET'),
       });
     } catch {
       throw new UnauthorizedException(

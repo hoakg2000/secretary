@@ -8,6 +8,7 @@ import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CalendarModule } from './calendar/calendar.module';
 import { CharacterModule } from './character/character.module';
+import { validate } from './config/env.validation';
 import { EmailModule } from './email/email.module';
 import { FinanceModule } from './finance/finance.module';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -17,6 +18,7 @@ import { ProactiveModule } from './proactive/proactive.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validate,
     }),
     ScheduleModule.forRoot(),
     BullModule.forRootAsync({
