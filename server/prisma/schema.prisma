@@ -117,6 +117,7 @@ model EmailLog {
   sender       String
   subject      String?
   rawBody      String?       @map("raw_body") @db.Text
+  aiSummary    String?       @map("ai_summary") @db.Text
   status       EmailStatus   @default(PENDING)
   createdAt    DateTime      @default(now()) @map("created_at")
 

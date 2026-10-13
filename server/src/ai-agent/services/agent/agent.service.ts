@@ -33,7 +33,7 @@ type Emit = (frame: ChatFrame) => void;
 /** Số vòng gọi tool tối đa cho một tin nhắn của người dùng */
 export const MAX_TOOL_ROUNDS = 5;
 
-const CHAT_MODEL = 'gemini-2.5-flash';
+export const CHAT_MODEL = 'gemini-2.5-flash';
 
 // Kết quả tool có thể chứa Decimal/Date: đưa về JSON thuần trước khi gửi cho model và client
 const toPlain = (value: unknown) => JSON.parse(JSON.stringify(value ?? null));

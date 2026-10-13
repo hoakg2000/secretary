@@ -46,7 +46,13 @@ and response shapes; this file lists what exists and who may call it.
 | PATCH | `/email-rules/:id` | JWT | Update a rule. |
 | DELETE | `/email-rules/:id` | JWT | Delete a rule. |
 
-Planned (not in the code): AI classification, `GET /email/logs`, reprocess, rule `type` filter.
+Every queued email is classified by one Gemini call without tools (the rule type only selects the prompt): the
+model's category `TRANSACTION` creates a transaction when exactly one active account matches the extracted account
+number / bank code and currency, `EVENT` creates a calendar event, `urgent` sends a proactive notification; the
+summary is stored in `email_logs.ai_summary` and the status becomes `PROCESSED`. Blacklisted mail never reaches the
+model.
+
+Planned (not in the code): `GET /email/logs`, reprocess, rule `type` filter.
 
 ## Finance — `/finance`
 
