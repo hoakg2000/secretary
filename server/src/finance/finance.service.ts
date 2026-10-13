@@ -97,6 +97,8 @@ export class FinanceService {
 
   /**
    * Đặt lại số dư theo thực tế: chênh lệch được ghi thành một giao dịch điều chỉnh.
+   * shortcut: đọc số dư rồi ghi chênh lệch ở isolation mặc định; giao dịch chen giữa làm số dư cuối lệch newBalance.
+   * Nâng khi có nhiều writer đồng thời -> SELECT ... FOR UPDATE trên dòng tài khoản.
    */
   async adjustBalance(id: string, dto: AdjustBalanceDto) {
     return this.prisma.$transaction(async (tx) => {
