@@ -3,6 +3,7 @@ import {
   IsBase64,
   IsInt,
   IsNotEmpty,
+  IsNotIn,
   IsOptional,
   IsString,
   Length,
@@ -106,6 +107,9 @@ export class EnvironmentVariables {
   // Chỉ đặt khi chạy sau reverse proxy: số hop hoặc danh sách IP/subnet (Express 'trust proxy')
   @IsOptional()
   @IsString()
+  @IsNotIn(['true', 'false'], {
+    message: 'TRUST_PROXY must be a proxy count or a list of addresses',
+  })
   TRUST_PROXY?: string;
 
   // Gmail Pub/Sub push: thiếu một trong ba thì POST /email/pubsub trả 503

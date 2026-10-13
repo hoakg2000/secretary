@@ -61,9 +61,17 @@ export class EmailService {
    * Trả về null nếu email đã tồn tại.
    */
   async ingest(dto: EmailWebhookDto) {
-    const emailLog = await this.createEmailLog(dto);
+    let emailLog = await this.createEmailLog(dto);
     if (!emailLog) {
-      return null;
+      // Trùng nhưng còn PENDING: lần trước có thể lỗi sau khi insert, trước khi enqueue -> enqueue lại.
+      // An toàn vì jobId = email log ID: job đang tồn tại thì BullMQ bỏ qua lần add này
+      const existing = await this.prisma.emailLog.findUnique({
+        where: { messageId: dto.messageId },
+      });
+      if (existing?.status !== EmailStatus.PENDING) {
+        return null;
+      }
+      emailLog = existing;
     }
 
     const ruleType = await this.emailRuleService.classify(emailLog);

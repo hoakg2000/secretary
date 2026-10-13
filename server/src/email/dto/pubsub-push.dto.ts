@@ -1,7 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  IsBase64,
   IsDefined,
   IsNotEmpty,
   IsOptional,
@@ -15,7 +14,8 @@ export class PubSubMessageDto {
     example:
       'eyJlbWFpbEFkZHJlc3MiOiJtZUBnbWFpbC5jb20iLCJoaXN0b3J5SWQiOiIxMjMifQ==',
   })
-  @IsBase64()
+  // Không ép @IsBase64: giá trị không được dùng, và 400 ở đây khiến Pub/Sub gửi lại mãi
+  @IsString()
   @IsNotEmpty()
   data: string;
 

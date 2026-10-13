@@ -8,6 +8,7 @@ function build(ruleType: string | null = null) {
     emailLog: {
       create: vi.fn().mockResolvedValue({ id: 'log1', ...dto, subject: null, rawBody: null }),
       update: vi.fn(),
+      findUnique: vi.fn(),
     },
   };
   const rules: any = { classify: vi.fn().mockResolvedValue(ruleType) };

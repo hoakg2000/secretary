@@ -56,7 +56,9 @@ function build(modelResult: unknown = BANK_RESULT) {
   };
   const finance: any = { createTransaction: vi.fn() };
   const calendar: any = { createEvent: vi.fn() };
-  const proactive: any = { evaluateAndTrigger: vi.fn() };
+  const proactive: any = {
+    evaluateAndTrigger: vi.fn().mockResolvedValue({ success: true }),
+  };
   const processor = new EmailProcessor(
     prisma,
     {} as any,

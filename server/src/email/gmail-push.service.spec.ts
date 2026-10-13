@@ -35,7 +35,7 @@ const gmailMessage = (id: string) => ({
 
 function build(env = ENV, storedHistoryId: string | null = '100') {
   const user = { id: 'u1', gmailHistoryId: storedHistoryId };
-  const seen = new Set<string>();
+  const seen = new Map<string, any>();
   const prisma: any = {
     user: {
       findFirst: vi.fn(async () => ({ ...user })),
@@ -50,9 +50,11 @@ function build(env = ENV, storedHistoryId: string | null = '100') {
             clientVersion: 'test',
           });
         }
-        seen.add(data.messageId);
-        return { id: `log-${data.messageId}`, ...data };
+        const row = { id: `log-${data.messageId}`, ...data };
+        seen.set(data.messageId, row);
+        return row;
       }),
+      findUnique: vi.fn(async ({ where }: any) => seen.get(where.messageId)),
       update: vi.fn(),
     },
   };
@@ -154,7 +156,8 @@ describe('POST /email/pubsub', () => {
       startHistoryId: '100',
       historyTypes: ['messageAdded'],
     });
-    expect(queue.add).toHaveBeenCalledTimes(2); // a and b, once each
+    // a and b: one log each; the still-PENDING re-adds reuse the same jobId, which BullMQ ignores
+    expect(new Set(queue.add.mock.calls.map((c: any) => c[2].jobId)).size).toBe(2);
     expect(queue.add.mock.calls[0][1]).toMatchObject({
       messageId: '<a@mail>',
       sender: 'Bank <no-reply@bank.vn>',
@@ -220,6 +223,18 @@ describe('POST /email/pubsub', () => {
     await expect(controller.gmailPush(AUTH, BODY)).resolves.toMatchObject({
       statusCode: 200,
     });
+  });
+
+  it('a message whose enqueue failed after its log was written is enqueued by the redelivery', async () => {
+    const { controller, queue, user } = build();
+    queue.add.mockRejectedValueOnce(new Error('redis down'));
+
+    await expect(controller.gmailPush(AUTH, BODY)).rejects.toThrow('redis down');
+    expect(user.gmailHistoryId).toBe('100');
+
+    await controller.gmailPush(AUTH, BODY);
+    const jobIds = queue.add.mock.calls.slice(1).map((c: any) => c[2].jobId);
+    expect(jobIds).toEqual(expect.arrayContaining(['log-<a@mail>', 'log-<b@mail>']));
   });
 
   it('answers 503 to a notification that arrives during a pass', async () => {

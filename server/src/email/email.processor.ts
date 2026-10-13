@@ -91,11 +91,17 @@ export class EmailProcessor
     });
 
     if (result.urgent) {
-      await this.proactiveService.evaluateAndTrigger({
+      const { success } = await this.proactiveService.evaluateAndTrigger({
         type: ProactiveTriggerType.URGENT_EVENT,
         message: `Email khẩn từ ${sender}: ${result.summary}`,
         metadata: { emailLogId },
       });
+      // shortcut: không retry (retry sẽ gọi lại model và có thể tạo trùng sự kiện); nâng khi cần -> hàng đợi gửi riêng
+      if (!success) {
+        this.logger.warn(
+          `[Email ${emailLogId}] Thông báo email khẩn chưa gửi được qua Telegram.`,
+        );
+      }
     }
 
     return {
