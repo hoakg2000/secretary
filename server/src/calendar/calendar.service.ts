@@ -1,5 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { AiTool } from '../common/decorators/ai-tool.decorator';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { QueryCalendarDto } from './dto/query-calendar.dto';
@@ -9,52 +13,17 @@ import { UpdateEventDto } from './dto/update-event.dto';
 export class CalendarService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private assertValidRange(startTime: Date, endTime: Date) {
+    if (endTime <= startTime) {
+      throw new BadRequestException(
+        'Thời gian kết thúc phải sau thời gian bắt đầu',
+      );
+    }
+  }
+
   /**
-   * AI Tool: Tạo sự kiện lịch mới
+   * Tạo sự kiện lịch mới (đánh dấu DIRTY để job sync đẩy lên Google)
    */
-  @AiTool({
-    name: 'create_calendar_event',
-    description: 'Tạo một sự kiện hoặc lời nhắc mới vào Lịch của người dùng.',
-    parameters: {
-      title: {
-        type: 'string',
-        description: 'Tiêu đề hoặc nội dung sự kiện',
-        required: true,
-      },
-      description: {
-        type: 'string',
-        description: 'Mô tả chi tiết sự kiện',
-        required: false,
-      },
-      location: {
-        type: 'string',
-        description: 'Địa điểm tổ chức sự kiện',
-        required: false,
-      },
-      startTime: {
-        type: 'string',
-        description:
-          'Thời gian bắt đầu theo định dạng ISO 8601 (ví dụ: 2026-10-15T09:00:00Z)',
-        required: true,
-      },
-      endTime: {
-        type: 'string',
-        description:
-          'Thời gian kết thúc theo định dạng ISO 8601 (ví dụ: 2026-10-15T10:00:00Z)',
-        required: true,
-      },
-      intent: {
-        type: 'string',
-        description: 'Mục đích/Loại sự kiện (ví dụ: WORK, PERSONAL, MEETING)',
-        required: false,
-      },
-      priorityStatus: {
-        type: 'string',
-        description: 'Mức độ ưu tiên (HIGH, MEDIUM, LOW)',
-        required: false,
-      },
-    },
-  })
   async createEvent(createEventDto: CreateEventDto) {
     const {
       title,
@@ -66,6 +35,8 @@ export class CalendarService {
       intent,
       priorityStatus,
     } = createEventDto;
+
+    this.assertValidRange(startTime, endTime);
 
     const event = await this.prisma.localCalendar.create({
       data: {
@@ -92,42 +63,17 @@ export class CalendarService {
   }
 
   /**
-   * AI Tool: Truy vấn danh sách sự kiện lịch
+   * Danh sách sự kiện giao với khoảng [fromDate, toDate] (bắt đầu trước toDate và kết thúc sau fromDate)
    */
-  @AiTool({
-    name: 'get_calendar_events',
-    description:
-      'Truy vấn danh sách các sự kiện lịch của người dùng theo khoảng thời gian.',
-    parameters: {
-      fromDate: {
-        type: 'string',
-        description: 'Thời gian bắt đầu lọc theo định dạng ISO 8601',
-        required: false,
-      },
-      toDate: {
-        type: 'string',
-        description: 'Thời gian kết thúc lọc theo định dạng ISO 8601',
-        required: false,
-      },
-    },
-  })
   async getEvents(queryDto: QueryCalendarDto) {
     const { fromDate, toDate } = queryDto;
 
-    const whereCondition: any = {};
-
-    if (fromDate || toDate) {
-      whereCondition.startTime = {};
-      if (fromDate) {
-        whereCondition.startTime.gte = fromDate;
-      }
-      if (toDate) {
-        whereCondition.startTime.lte = toDate;
-      }
-    }
+    const where: Prisma.LocalCalendarWhereInput = { deletedAt: null };
+    if (toDate) where.startTime = { lte: toDate };
+    if (fromDate) where.endTime = { gte: fromDate };
 
     const events = await this.prisma.localCalendar.findMany({
-      where: whereCondition,
+      where,
       orderBy: {
         startTime: 'asc',
       },
@@ -143,8 +89,8 @@ export class CalendarService {
    * Lấy chi tiết 1 sự kiện lịch
    */
   async getEventById(id: string) {
-    const event = await this.prisma.localCalendar.findUnique({
-      where: { id },
+    const event = await this.prisma.localCalendar.findFirst({
+      where: { id, deletedAt: null },
       include: {
         syncState: true,
       },
@@ -158,51 +104,22 @@ export class CalendarService {
   }
 
   /**
-   * AI Tool: Cập nhật sự kiện lịch
+   * Cập nhật sự kiện lịch
    */
-  @AiTool({
-    name: 'update_calendar_event',
-    description: 'Cập nhật thông tin chi tiết của một sự kiện lịch đã tồn tại.',
-    parameters: {
-      id: {
-        type: 'string',
-        description: 'ID của sự kiện lịch cần cập nhật',
-        required: true,
-      },
-      title: {
-        type: 'string',
-        description: 'Tiêu đề mới của sự kiện',
-        required: false,
-      },
-      description: {
-        type: 'string',
-        description: 'Mô tả mới',
-        required: false,
-      },
-      location: {
-        type: 'string',
-        description: 'Địa điểm mới',
-        required: false,
-      },
-      startTime: {
-        type: 'string',
-        description: 'Thời gian bắt đầu mới theo định dạng ISO 8601',
-        required: false,
-      },
-      endTime: {
-        type: 'string',
-        description: 'Thời gian kết thúc mới theo định dạng ISO 8601',
-        required: false,
-      },
-    },
-  })
   async updateEvent(id: string, updateEventDto: UpdateEventDto) {
-    await this.getEventById(id);
+    const existing = await this.getEventById(id);
+
+    this.assertValidRange(
+      updateEventDto.startTime ?? existing.startTime,
+      updateEventDto.endTime ?? existing.endTime,
+    );
 
     const updatedEvent = await this.prisma.localCalendar.update({
       where: { id },
       data: {
         ...updateEventDto,
+        // Đổi giờ bắt đầu thì cho phép nhắc lịch lại
+        ...(updateEventDto.startTime && { remindedAt: null }),
         syncState: {
           upsert: {
             create: {
@@ -223,25 +140,26 @@ export class CalendarService {
   }
 
   /**
-   * AI Tool: Xóa sự kiện lịch
+   * Xóa sự kiện lịch.
+   * Đã có trên Google -> xóa mềm + DIRTY để job sync xóa trên Google rồi mới xóa hẳn.
+   * Chưa từng đẩy lên Google -> xóa hẳn ngay.
    */
-  @AiTool({
-    name: 'delete_calendar_event',
-    description: 'Xóa một sự kiện lịch khỏi hệ thống.',
-    parameters: {
-      id: {
-        type: 'string',
-        description: 'ID của sự kiện lịch cần xóa',
-        required: true,
-      },
-    },
-  })
   async deleteEvent(id: string) {
-    await this.getEventById(id);
+    const event = await this.getEventById(id);
 
-    await this.prisma.localCalendar.delete({
-      where: { id },
-    });
+    if (event.syncState?.googleEventId) {
+      await this.prisma.localCalendar.update({
+        where: { id },
+        data: {
+          deletedAt: new Date(),
+          syncState: { update: { syncStatus: 'DIRTY' } },
+        },
+      });
+    } else {
+      await this.prisma.localCalendar.delete({
+        where: { id },
+      });
+    }
 
     return { success: true };
   }

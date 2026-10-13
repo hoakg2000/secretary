@@ -4,7 +4,6 @@ import {
   HttpCode,
   HttpStatus,
   Post,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -12,13 +11,11 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TriggerProactiveDto } from './dto/trigger-proactive.dto';
 import { ProactiveService } from './proactive.service';
 
 @ApiTags('Proactive Agent')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
 @Controller('api/v1/proactive')
 export class ProactiveController {
   constructor(private readonly proactiveService: ProactiveService) {}
@@ -46,7 +43,8 @@ export class ProactiveController {
     const data = await this.proactiveService.evaluateAndTrigger(dto);
     return {
       statusCode: HttpStatus.OK,
-      message: 'Kích hoạt thông báo chủ động thành công',
+      // data.result.status cho biết thông báo đã gửi thật (SENT) hay mới chỉ ghi log (LOGGED)
+      message: 'Đã xử lý trigger thông báo chủ động',
       data,
     };
   }

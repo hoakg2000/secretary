@@ -9,7 +9,6 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -17,7 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CalendarSyncService } from './calendar-sync.service';
 import { CalendarService } from './calendar.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { QueryCalendarDto } from './dto/query-calendar.dto';
@@ -25,10 +24,33 @@ import { UpdateEventDto } from './dto/update-event.dto';
 
 @ApiTags('Calendar')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
 @Controller('api/v1/calendar')
 export class CalendarController {
-  constructor(private readonly calendarService: CalendarService) {}
+  constructor(
+    private readonly calendarService: CalendarService,
+    private readonly calendarSyncService: CalendarSyncService,
+  ) {}
+
+  @ApiOperation({
+    summary: 'Đẩy ngay các thay đổi lịch cục bộ lên Google Calendar (một chiều)',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Số sự kiện đã đẩy / xóa / lỗi. data = null nếu chưa kết nối Google hoặc đang có lượt đồng bộ khác',
+  })
+  @Post('sync')
+  @HttpCode(HttpStatus.OK)
+  async syncNow() {
+    const data = await this.calendarSyncService.syncLocalToGoogle();
+    return {
+      statusCode: HttpStatus.OK,
+      message: data
+        ? 'Đồng bộ Google Calendar hoàn tất'
+        : 'Bỏ qua đồng bộ (chưa kết nối Google hoặc đang có lượt đồng bộ khác)',
+      data,
+    };
+  }
 
   @ApiOperation({ summary: 'Tạo mới sự kiện lịch cục bộ' })
   @ApiResponse({

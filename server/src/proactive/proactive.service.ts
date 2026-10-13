@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AiTool } from '../common/decorators/ai-tool.decorator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,21 +9,26 @@ import {
   TriggerProactiveDto,
 } from './dto/trigger-proactive.dto';
 
+// LOGGED: chưa có kênh gửi thật, thông báo mới chỉ được ghi log. Sẽ có 'SENT' khi tích hợp Telegram (plan 6.1)
+export type ProactiveDispatchStatus = 'LOGGED';
+
 @Injectable()
 export class ProactiveService {
   private readonly logger = new Logger(ProactiveService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
 
   /**
-   * Đánh giá ngữ cảnh và gửi thông báo chủ động
+   * Chuyển tiếp một thông báo chủ động tới kênh gửi
    */
   async evaluateAndTrigger(dto: TriggerProactiveDto) {
     this.logger.log(
       `[Proactive] Handling trigger: type=${dto.type}, channel=${dto.channel}`,
     );
 
-    // 1. Log / Lưu lại vết trigger hoặc xử lý theo loại trigger
     const notificationPayload = {
       type: dto.type,
       message: dto.message,
@@ -31,19 +37,19 @@ export class ProactiveService {
       timestamp: new Date().toISOString(),
     };
 
-    // 2. Phân tuyến kênh gửi thông báo
     const sendResult = await this.dispatchNotification(notificationPayload);
 
     return {
-      success: true,
-      deliveredChannel: dto.channel,
+      // Chỉ true khi thông báo thực sự tới được người dùng
+      success: (sendResult.status as string) === 'SENT',
+      channel: notificationPayload.channel,
       payload: notificationPayload,
       result: sendResult,
     };
   }
 
   /**
-   * Điều phối gửi thông báo đến các kênh (Telegram / Push Notification)
+   * Điều phối gửi thông báo đến các kênh (Telegram / Push Notification). Hiện chỉ ghi log.
    */
   private async dispatchNotification(payload: {
     type: ProactiveTriggerType;
@@ -51,31 +57,17 @@ export class ProactiveService {
     channel: ProactiveChannel;
     metadata: Record<string, any>;
     timestamp: string;
-  }) {
-    // Demo giả lập dispatching notification
-    if (
-      payload.channel === ProactiveChannel.TELEGRAM ||
-      payload.channel === ProactiveChannel.ALL
-    ) {
-      this.logger.log(
-        `[Telegram Bot] Sending proactive message: "${payload.message}"`,
-      );
-    }
+  }): Promise<{ status: ProactiveDispatchStatus; at: string }> {
+    this.logger.log(
+      `[${payload.channel}] (chưa cấu hình kênh gửi) Proactive message: "${payload.message}"`,
+    );
 
-    if (
-      payload.channel === ProactiveChannel.PUSH_NOTIFICATION ||
-      payload.channel === ProactiveChannel.ALL
-    ) {
-      this.logger.log(
-        `[Push Notification] Sending notification: "${payload.message}"`,
-      );
-    }
-
-    return { status: 'SENT', sentAt: new Date().toISOString() };
+    return { status: 'LOGGED', at: new Date().toISOString() };
   }
 
   /**
-   * Fallback Cron Job: Chạy định kỳ mỗi 10 phút để rà soát sự kiện / lịch trình sắp diễn ra
+   * Fallback Cron Job: Chạy định kỳ mỗi 10 phút để nhắc các sự kiện sắp diễn ra trong 15 phút tới.
+   * Mỗi sự kiện chỉ được nhắc một lần (reminded_at).
    */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async handleFallbackCron() {
@@ -84,28 +76,36 @@ export class ProactiveService {
     const now = new Date();
     const fifteenMinutesLater = new Date(now.getTime() + 15 * 60 * 1000);
 
-    // Rà soát lịch cục bộ sắp diễn ra trong 15 phút tới
     const upcomingEvents = await this.prisma.localCalendar.findMany({
       where: {
         startTime: {
           gte: now,
           lte: fifteenMinutesLater,
         },
+        remindedAt: null,
+        deletedAt: null,
       },
     });
 
-    if (upcomingEvents.length > 0) {
-      for (const event of upcomingEvents) {
-        this.logger.log(
-          `[Cron Remind] Upcoming event found: "${event.title}" at ${event.startTime}`,
-        );
-        await this.evaluateAndTrigger({
-          type: ProactiveTriggerType.SCHEDULED_REMINDER,
-          message: `Nhắc nhở lịch trình: Sắp tới cuộc hẹn "${event.title}" lúc ${new Date(event.startTime).toLocaleTimeString('vi-VN')}`,
-          channel: ProactiveChannel.TELEGRAM,
-          metadata: { eventId: event.id, title: event.title },
-        });
-      }
+    const timeZone = this.configService.get<string>(
+      'APP_TIMEZONE',
+      'Asia/Ho_Chi_Minh',
+    );
+
+    for (const event of upcomingEvents) {
+      this.logger.log(
+        `[Cron Remind] Upcoming event found: "${event.title}" at ${event.startTime.toISOString()}`,
+      );
+      await this.evaluateAndTrigger({
+        type: ProactiveTriggerType.SCHEDULED_REMINDER,
+        message: `Nhắc nhở lịch trình: Sắp tới cuộc hẹn "${event.title}" lúc ${event.startTime.toLocaleTimeString('vi-VN', { timeZone })}`,
+        channel: ProactiveChannel.TELEGRAM,
+        metadata: { eventId: event.id, title: event.title },
+      });
+      await this.prisma.localCalendar.update({
+        where: { id: event.id },
+        data: { remindedAt: new Date() },
+      });
     }
   }
 
@@ -117,6 +117,8 @@ export class ProactiveService {
     name: 'send_proactive_notification',
     description:
       'Chủ động gửi thông báo / tin nhắn nhắc nhở trực tiếp cho người dùng qua Telegram hoặc Push Notification khi có sự kiện khẩn cấp hoặc tin nhắn cần chú ý.',
+    dto: TriggerProactiveDto,
+    requiresConfirmation: true,
     parameters: {
       type: {
         type: 'string',
@@ -143,15 +145,7 @@ export class ProactiveService {
       },
     },
   })
-  async aiSendProactiveNotification(params: {
-    type: ProactiveTriggerType;
-    message: string;
-    channel?: ProactiveChannel;
-  }) {
-    return this.evaluateAndTrigger({
-      type: params.type,
-      message: params.message,
-      channel: params.channel ?? ProactiveChannel.TELEGRAM,
-    });
+  async aiSendProactiveNotification(dto: TriggerProactiveDto) {
+    return this.evaluateAndTrigger(dto);
   }
 }
