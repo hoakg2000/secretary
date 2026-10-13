@@ -8,6 +8,7 @@ import {
   Param,
   Post,
   Query,
+  Req,
   RequestMethod,
   Res,
   Sse,
@@ -18,15 +19,17 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { Readable } from 'node:stream';
 import { Observable } from 'rxjs';
 import { ChatStreamDto } from './dto/chat-stream.dto';
+import { ListChatDto } from './dto/list-chat.dto';
 import { ListMemoryDto } from './dto/list-memory.dto';
 import { SaveMemoryDto } from './dto/save-memory.dto';
 import { SearchMemoryDto } from './dto/search-memory.dto';
 import { TtsRequestDto } from './dto/tts-request.dto';
 import { AgentService } from './services/agent/agent.service';
+import { ChatSessionService } from './services/chat/chat-session.service';
 import { MemoryService } from './services/memory/memory.service';
 import { TtsService } from './services/tts/tts.service';
 
@@ -38,6 +41,7 @@ export class AiAgentController {
     private readonly memoryService: MemoryService,
     private readonly agentService: AgentService,
     private readonly ttsService: TtsService,
+    private readonly chatSessionService: ChatSessionService,
   ) {}
 
   @ApiOperation({ summary: 'Lưu ký ức AI mới thủ công (Semantic Memory)' })
@@ -98,16 +102,87 @@ export class AiAgentController {
   @ApiOperation({
     summary: 'Chat tương tác thời gian thực với AI Agent (SSE Stream qua POST)',
     description:
-      'Các frame `data:` là JSON có `type`: text | tool_call | tool_result | confirmation_required | error | done.',
+      'Các frame `data:` là JSON có `type`: session | text | tool_call | tool_result | confirmation_required | error | done. Frame đầu tiên luôn là `session` (chứa `sessionId`).',
   })
   @ApiResponse({
     status: 200,
     description: 'Bắt đầu luồng Server-Sent Events thành công',
   })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy phiên chat' })
   // POST để gửi được body (EventSource/GET không có body)
   @Sse('chat/stream', { method: RequestMethod.POST })
-  chatStream(@Body() dto: ChatStreamDto): Observable<{ data: string }> {
-    return this.agentService.chatStream(dto);
+  async chatStream(
+    @Req() req: Request & { user: { userId: string } },
+    @Body() dto: ChatStreamDto,
+  ): Promise<Observable<{ data: string }>> {
+    return this.agentService.chatStream(req.user.userId, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Danh sách phiên chat (tin nhắn mới nhất trước, phân trang)',
+  })
+  @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
+  @Get('sessions')
+  @HttpCode(HttpStatus.OK)
+  async listSessions(
+    @Req() req: Request & { user: { userId: string } },
+    @Query() dto: ListChatDto,
+  ) {
+    const data = await this.chatSessionService.listSessions(
+      req.user.userId,
+      dto.page,
+      dto.pageSize,
+    );
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Lấy danh sách phiên chat thành công',
+      data,
+    };
+  }
+
+  @ApiOperation({
+    summary: 'Tin nhắn của một phiên chat (cũ trước, phân trang)',
+  })
+  @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy phiên chat' })
+  @Get('sessions/:id/messages')
+  @HttpCode(HttpStatus.OK)
+  async listMessages(
+    @Req() req: Request & { user: { userId: string } },
+    @Param('id') id: string,
+    @Query() dto: ListChatDto,
+  ) {
+    const data = await this.chatSessionService.listMessages(
+      req.user.userId,
+      id,
+      dto.page,
+      dto.pageSize,
+    );
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Lấy danh sách tin nhắn thành công',
+      data,
+    };
+  }
+
+  @ApiOperation({ summary: 'Xóa một phiên chat cùng các tin nhắn của nó' })
+  @ApiResponse({ status: 200, description: 'Xóa phiên chat thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy phiên chat' })
+  @Delete('sessions/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteSession(
+    @Req() req: Request & { user: { userId: string } },
+    @Param('id') id: string,
+  ) {
+    const data = await this.chatSessionService.deleteSession(
+      req.user.userId,
+      id,
+    );
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Xóa phiên chat thành công',
+      data,
+    };
   }
 
   @ApiOperation({

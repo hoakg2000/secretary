@@ -46,6 +46,7 @@ flowchart LR
     AiAgentController["AiAgentController"]
     AgentService["AgentService"]
     PendingActionStore["PendingActionStore: in-memory Map"]
+    ChatSessionService["ChatSessionService: chat_sessions, chat_messages"]
     MemoryService["MemoryService"]
     MemoryTools["MemoryTools: 2 @AiTool methods"]
     RagChunkService["RagChunkService: unused"]
@@ -87,7 +88,9 @@ flowchart LR
   AiAgentController --> AgentService
   AiAgentController --> MemoryService
   AiAgentController --> TtsService
+  AiAgentController -->|"list sessions, list messages, delete session"| ChatSessionService
   AgentService --> PendingActionStore
+  AgentService -->|"resolve session, store messages, history, link memory"| ChatSessionService
   AgentService -->|"pre-turn retrieval"| MemoryService
   AgentService --> GenAiProvider
   MemoryService -->|"embeddings"| GenAiProvider
@@ -114,6 +117,7 @@ flowchart LR
   %% external systems
   PrismaService --> Postgres
   MemoryService -->|"pgvector queries via PrismaService"| Postgres
+  ChatSessionService -->|"relational only, no vector, via PrismaService"| Postgres
   EmailService -->|"add job"| Queue
   Queue -->|"process job"| EmailProcessor
   GenAiProvider -->|"chat, classification, embeddings"| Gemini

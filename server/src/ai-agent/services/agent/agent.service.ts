@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
+import { ChatRole, Prisma } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { Observable } from 'rxjs';
@@ -17,6 +18,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatStreamDto } from '../../dto/chat-stream.dto';
 import { GenAiProvider } from '../../genai.provider';
+import { ChatSessionService } from '../chat/chat-session.service';
 import { MemoryService } from '../memory/memory.service';
 import { PendingActionStore } from './pending-action.store';
 
@@ -30,10 +32,26 @@ interface DiscoveredTool {
 type ChatFrame = Record<string, unknown> & { type: string };
 type Emit = (frame: ChatFrame) => void;
 
+type ChatCharacter = Prisma.CharacterGetPayload<{
+  include: { personas: true };
+}>;
+
+/** Trạng thái của một lượt chat. ID tin nhắn nằm ở đây, không bao giờ lấy từ model */
+interface ChatTurn {
+  userMessageId: string;
+  text: string;
+  toolCalls: Record<string, unknown>[];
+  memoryLinked: boolean;
+}
+
 /** Số vòng gọi tool tối đa cho một tin nhắn của người dùng */
 export const MAX_TOOL_ROUNDS = 5;
 
 export const CHAT_MODEL = 'gemini-2.5-flash';
+
+/** Quy tắc chọn tin nhắn đáng nhớ khi Character không cấu hình memoryRule (D20) */
+export const DEFAULT_MEMORY_RULE =
+  'Chỉ thông tin có giá trị lâu dài về người dùng mới đáng ghi nhớ: danh tính, sở thích, các mối quan hệ và những cam kết của họ.';
 
 // Kết quả tool có thể chứa Decimal/Date: đưa về JSON thuần trước khi gửi cho model và client
 const toPlain = (value: unknown) => JSON.parse(JSON.stringify(value ?? null));
@@ -49,6 +67,7 @@ export class AgentService implements OnModuleInit {
     private readonly genAi: GenAiProvider,
     private readonly memoryService: MemoryService,
     private readonly pendingActions: PendingActionStore,
+    private readonly chatSessions: ChatSessionService,
     private readonly discoveryService: DiscoveryService,
     private readonly metadataScanner: MetadataScanner,
     private readonly reflector: Reflector,
@@ -119,19 +138,31 @@ export class AgentService implements OnModuleInit {
   }
 
   /**
-   * Lấy Persona / System Prompt của Active Character
+   * Character theo ID; không có ID hoặc không tìm thấy thì lấy Active Character
    */
-  private async getPersonaPrompt(characterId?: string): Promise<string> {
-    const character = characterId
+  private async loadCharacter(
+    characterId?: string | null,
+  ): Promise<ChatCharacter | null> {
+    const byId = characterId
       ? await this.prisma.character.findUnique({
           where: { id: characterId },
           include: { personas: true },
         })
-      : await this.prisma.character.findFirst({
-          where: { isActive: true },
-          include: { personas: true },
-        });
+      : null;
 
+    return (
+      byId ??
+      (await this.prisma.character.findFirst({
+        where: { isActive: true },
+        include: { personas: true },
+      }))
+    );
+  }
+
+  /**
+   * Persona / System Prompt của Character
+   */
+  private getPersonaPrompt(character: ChatCharacter | null): string {
     if (!character || character.personas.length === 0) {
       return 'Bạn là một Trợ lý AI cá nhân hóa thông minh, lịch sự và chu đáo.';
     }
@@ -144,10 +175,13 @@ export class AgentService implements OnModuleInit {
   }
 
   /**
-   * System instruction = persona + thời gian hiện tại + các ký ức liên quan tới tin nhắn
+   * System instruction = persona + thời gian hiện tại + quy tắc ghi nhớ + các ký ức liên quan tới tin nhắn
    */
-  private async buildSystemInstruction(dto: ChatStreamDto): Promise<string> {
-    const sections = [await this.getPersonaPrompt(dto.characterId)];
+  private async buildSystemInstruction(
+    dto: ChatStreamDto,
+    character: ChatCharacter | null,
+  ): Promise<string> {
+    const sections = [this.getPersonaPrompt(character)];
 
     const timeZone = this.configService.get<string>(
       'APP_TIMEZONE',
@@ -159,6 +193,14 @@ export class AgentService implements OnModuleInit {
 
     sections.push(
       'Các công cụ ghi dữ liệu (tạo giao dịch, sửa/xóa lịch, gửi thông báo) không chạy ngay: khi nhận trạng thái awaiting_user_confirmation, hãy nói rõ bạn đề xuất gì và rằng người dùng cần xác nhận.',
+    );
+
+    sections.push(
+      [
+        '## Quy tắc ghi nhớ',
+        character?.memoryRule ?? DEFAULT_MEMORY_RULE,
+        'Chỉ gọi công cụ save_user_memory cho tin nhắn đáp ứng quy tắc này; không bao giờ gọi cho bất kỳ nội dung nào khác.',
+      ].join('\n'),
     );
 
     // Ký ức truy xuất trước lượt chat. Lỗi truy xuất không được làm hỏng cuộc trò chuyện
@@ -188,15 +230,36 @@ export class AgentService implements OnModuleInit {
   /**
    * Stream câu trả lời qua SSE kết hợp vòng lặp Function Calling.
    * Client ngắt kết nối (unsubscribe) thì vòng lặp dừng.
+   * Phiên chat được xác định trước khi mở stream: sessionId lạ hoặc của người khác là HTTP 404, không gọi model.
    */
-  chatStream(dto: ChatStreamDto): Observable<{ data: string }> {
+  async chatStream(
+    userId: string,
+    dto: ChatStreamDto,
+  ): Promise<Observable<{ data: string }>> {
+    const existing = dto.sessionId
+      ? await this.chatSessions.resolve(userId, dto.sessionId)
+      : null;
+    const character = await this.loadCharacter(
+      dto.characterId ?? existing?.characterId,
+    );
+    const session =
+      existing ??
+      (await this.chatSessions.resolve(
+        userId,
+        undefined,
+        character?.id,
+        dto.message,
+      ));
+
     return new Observable((subscriber) => {
       let cancelled = false;
       const emit: Emit = (frame) => {
         if (!cancelled) subscriber.next({ data: JSON.stringify(frame) });
       };
 
-      this.runChat(dto, emit, () => cancelled)
+      emit({ type: 'session', sessionId: session.id });
+
+      this.runChat(session.id, dto, character, emit, () => cancelled)
         .then(() => emit({ type: 'done' }))
         .catch((error: any) => {
           this.logger.error('Lỗi trong quá trình ChatStream:', error);
@@ -214,10 +277,25 @@ export class AgentService implements OnModuleInit {
   }
 
   private async runChat(
+    sessionId: string,
     dto: ChatStreamDto,
+    character: ChatCharacter | null,
     emit: Emit,
     isCancelled: () => boolean,
   ) {
+    // Tin nhắn của người dùng được lưu nguyên văn trước khi gọi model
+    const userMessage = await this.chatSessions.appendMessage(
+      sessionId,
+      ChatRole.USER,
+      dto.message,
+    );
+    const turn: ChatTurn = {
+      userMessageId: userMessage.id,
+      text: '',
+      toolCalls: [],
+      memoryLinked: false,
+    };
+
     const functionDeclarations = Array.from(this.toolsMap.values()).map(
       (t) => t.definition,
     );
@@ -225,16 +303,13 @@ export class AgentService implements OnModuleInit {
     const chat = this.genAi.get().chats.create({
       model: CHAT_MODEL,
       config: {
-        systemInstruction: await this.buildSystemInstruction(dto),
+        systemInstruction: await this.buildSystemInstruction(dto, character),
         tools:
           functionDeclarations.length > 0
             ? [{ functionDeclarations }]
             : undefined,
       },
-      history: dto.history?.map((turn) => ({
-        role: turn.role,
-        parts: [{ text: turn.text }],
-      })),
+      history: await this.chatSessions.recentHistory(sessionId, userMessage.id),
     });
 
     let message: string | Part[] = dto.message;
@@ -251,10 +326,13 @@ export class AgentService implements OnModuleInit {
         const text = chunk.candidates?.[0]?.content?.parts
           ?.map((part) => (part.thought ? '' : (part.text ?? '')))
           .join('');
-        if (text) emit({ type: 'text', content: text });
+        if (text) {
+          turn.text += text;
+          emit({ type: 'text', content: text });
+        }
       }
 
-      if (calls.length === 0) return;
+      if (calls.length === 0) break;
 
       if (round >= MAX_TOOL_ROUNDS) {
         throw new Error(
@@ -270,12 +348,23 @@ export class AgentService implements OnModuleInit {
           functionResponse: {
             id: call.id,
             name: call.name,
-            response: await this.executeToolCall(call, emit),
+            response: await this.executeToolCall(call, emit, turn),
           },
         });
       }
       message = responses;
     }
+
+    // Lượt lỗi hoặc bị client hủy không lưu câu trả lời dở dang
+    if (isCancelled()) return;
+    await this.chatSessions.appendMessage(
+      sessionId,
+      ChatRole.MODEL,
+      turn.text,
+      turn.toolCalls.length > 0
+        ? (turn.toolCalls as Prisma.InputJsonValue)
+        : undefined,
+    );
   }
 
   /**
@@ -285,9 +374,18 @@ export class AgentService implements OnModuleInit {
   private async executeToolCall(
     call: FunctionCall,
     emit: Emit,
+    turn: ChatTurn,
   ): Promise<Record<string, unknown>> {
+    // Ghi lại lời gọi tool của lượt để lưu cùng tin nhắn MODEL
+    const record = (outcome: Record<string, unknown>) => {
+      turn.toolCalls.push(
+        toPlain({ tool: call.name, args: call.args, ...outcome }),
+      );
+    };
+
     const tool = call.name ? this.toolsMap.get(call.name) : undefined;
     if (!tool) {
+      record({ error: `unknown tool: ${call.name}` });
       return { error: `unknown tool: ${call.name}` };
     }
 
@@ -299,6 +397,7 @@ export class AgentService implements OnModuleInit {
         forbidNonWhitelisted: true,
       });
       if (errors.length > 0) {
+        record({ error: 'invalid arguments' });
         return {
           error: 'invalid arguments',
           details: errors.flatMap((e) => Object.values(e.constraints ?? {})),
@@ -315,6 +414,7 @@ export class AgentService implements OnModuleInit {
         tool: call.name,
         args: call.args,
       });
+      record({ actionId: action.id });
       return { status: 'awaiting_user_confirmation' };
     }
 
@@ -323,9 +423,26 @@ export class AgentService implements OnModuleInit {
     try {
       const result = toPlain(await tool.instance[tool.methodName](args));
       emit({ type: 'tool_result', tool: call.name, result });
+      record({ result });
+      // memory_id là unique: chỉ ký ức đầu tiên của lượt được gắn với tin nhắn của người dùng
+      if (
+        call.name === 'save_user_memory' &&
+        !turn.memoryLinked &&
+        result?.id
+      ) {
+        turn.memoryLinked = true;
+        await this.chatSessions
+          .linkMemory(turn.userMessageId, result.id)
+          .catch((error: any) =>
+            this.logger.warn(
+              `Không gắn được ký ức với tin nhắn: ${error.message}`,
+            ),
+          );
+      }
       return { result };
     } catch (error: any) {
       this.logger.warn(`AiTool ${call.name} lỗi: ${error.message}`);
+      record({ error: error.message || 'tool failed' });
       return { error: error.message || 'tool failed' };
     }
   }

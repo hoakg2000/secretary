@@ -26,6 +26,7 @@ model User {
 
   userSessions         UserSession[]
   refreshTokens        RefreshToken[]
+  chatSessions         ChatSession[]
 
   @@map("users")
 }
@@ -70,10 +71,12 @@ model Character {
   voiceId   String?   @map("voice_id")
   source    String?
   isActive  Boolean   @default(false) @map("is_active")
+  memoryRule String?  @map("memory_rule") @db.Text // D20: importance rule; null = built-in default
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
-  personas  Persona[]
+  personas     Persona[]
+  chatSessions ChatSession[]
 
   @@map("characters")
 }
@@ -285,6 +288,8 @@ model AiMemory {
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
+  chatMessage    ChatMessage?
+
   @@map("ai_memories")
 }
 
@@ -297,4 +302,47 @@ model RagChunk {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("rag_chunks")
+}
+
+// ==========================================
+// 5. CHAT SESSIONS & MESSAGES (D19, D20)
+// ==========================================
+// Relational only: no vector / tsvector column here, ever (D19).
+
+model ChatSession {
+  id            String    @id @default(uuid())
+  userId        String    @map("user_id")
+  characterId   String?   @map("character_id")
+  title         String?
+  lastMessageAt DateTime  @default(now()) @map("last_message_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character Character?    @relation(fields: [characterId], references: [id], onDelete: SetNull)
+  messages  ChatMessage[]
+
+  @@index([userId, lastMessageAt])
+  @@map("chat_sessions")
+}
+
+enum ChatRole {
+  USER
+  MODEL
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  role      ChatRole
+  content   String   @db.Text
+  toolCalls Json?    @map("tool_calls")
+  memoryId  String?  @unique @map("memory_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  memory  AiMemory?   @relation(fields: [memoryId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt])
+  @@map("chat_messages")
 }
