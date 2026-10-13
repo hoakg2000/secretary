@@ -43,6 +43,22 @@ All commands run from `server/`. Needs Node 24 and Docker.
 
 Changing `TOKEN_ENCRYPTION_KEY` makes stored Google tokens unreadable: reconnect afterwards.
 
+## Gmail push ingestion (optional)
+
+Needs a connected Google account (above) and a public HTTPS URL for this server: Pub/Sub push cannot reach
+`localhost`, so use a tunnel or a reverse proxy (then also set `TRUST_PROXY`, see `environment.md`).
+
+1. In the Google Cloud project of the OAuth client, enable the Gmail API and the Pub/Sub API.
+2. Create a Pub/Sub topic. Grant `gmail-api-push@system.gserviceaccount.com` the Pub/Sub Publisher role on it.
+3. Create a push subscription on the topic with endpoint `https://<host>/api/v1/email/pubsub` and
+   authentication enabled: choose a service account and set an audience (for example the endpoint URL).
+4. Set `GMAIL_PUBSUB_TOPIC` (`projects/<project>/topics/<topic>`), `PUBSUB_PUSH_AUDIENCE` and
+   `PUBSUB_PUSH_SERVICE_ACCOUNT` (the service account's email), then restart the server.
+5. The server calls Gmail `users.watch` at startup and once a day (a watch expires after 7 days). If Google was
+   connected after startup, restart once so the watch is registered.
+
+Not yet run against the real services (`next-steps.md` section 1.4).
+
 ## Upgrading a database created before 2026-10-13
 
 The migrations dated `20261013…` assume the following. Take a `pg_dump` first.

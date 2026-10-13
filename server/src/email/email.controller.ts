@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -15,11 +16,14 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { Public } from '../common/decorators/public.decorator';
 import { CreateEmailRuleDto } from './dto/create-email-rule.dto';
 import { EmailWebhookDto } from './dto/email-webhook.dto';
+import { PubSubPushDto } from './dto/pubsub-push.dto';
 import { UpdateEmailRuleDto } from './dto/update-email-rule.dto';
 import { EmailRuleService } from './email-rule.service';
 import { EmailService } from './email.service';
+import { GmailPushService } from './gmail-push.service';
 
 @ApiTags('Email & Rules')
 @ApiBearerAuth('JWT-auth')
@@ -28,6 +32,7 @@ export class EmailController {
   constructor(
     private readonly emailService: EmailService,
     private readonly emailRuleService: EmailRuleService,
+    private readonly gmailPushService: GmailPushService,
   ) {}
 
   // ==========================================
@@ -62,6 +67,39 @@ export class EmailController {
         ? 'Đã tiếp nhận email và đẩy vào hàng đợi xử lý'
         : 'Đã tiếp nhận email, bỏ qua do khớp Blacklist',
       data: result,
+    };
+  }
+
+  // ==========================================
+  // GMAIL PUB/SUB PUSH
+  // ==========================================
+
+  @ApiOperation({
+    summary:
+      'Webhook Google Pub/Sub push của Gmail. Không dùng JWT của ứng dụng: xác thực bằng ID token do Google ký',
+  })
+  @ApiResponse({ status: 200, description: 'Đã nạp xong các email mới' })
+  @ApiResponse({
+    status: 401,
+    description: 'Thiếu hoặc sai ID token của push subscription',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Chưa cấu hình Pub/Sub, hoặc lượt nạp trước chưa xong',
+  })
+  @Public()
+  @Post('email/pubsub')
+  @HttpCode(HttpStatus.OK)
+  async gmailPush(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() _dto: PubSubPushDto,
+  ) {
+    await this.gmailPushService.verifyPushToken(authorization);
+    const fetched = await this.gmailPushService.runPass();
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Đã nạp email mới từ Gmail',
+      data: { fetched },
     };
   }
 

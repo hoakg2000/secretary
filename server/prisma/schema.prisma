@@ -19,6 +19,7 @@ model User {
   googleAccessToken    String?       @map("google_access_token")
   googleRefreshToken   String?       @map("google_refresh_token")
   googleTokenExpiresAt DateTime?     @map("google_token_expires_at")
+  gmailHistoryId       String?       @map("gmail_history_id") // mốc Gmail history đã nạp xong (Pub/Sub push)
   isActive             Boolean       @default(true) @map("is_active")
   createdAt            DateTime      @default(now()) @map("created_at")
   updatedAt            DateTime      @updatedAt @map("updated_at")

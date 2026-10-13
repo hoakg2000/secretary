@@ -39,13 +39,14 @@ and response shapes; this file lists what exists and who may call it.
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | POST | `/email/ingest` | JWT | Manual ingest of one parsed email `{ messageId, sender, subject?, rawBody? }`. Duplicate `messageId` → 200 with `data: null`. Blacklisted → saved `SKIPPED`, not queued. |
+| POST | `/email/pubsub` | Public + Google ID token | Gmail Pub/Sub push receiver. `Authorization: Bearer <ID token>` must be signed by Google for `PUBSUB_PUSH_AUDIENCE` and belong to `PUBSUB_PUSH_SERVICE_ACCOUNT`, else 401. Body `{ message: { data, messageId, publishTime? }, subscription? }`. Fetches new INBOX messages since the stored Gmail history ID and ingests each one; returns `data.fetched`. 503 when the three Pub/Sub variables are missing or a pass is already running; any non-2xx makes Pub/Sub redeliver, which is safe (duplicates are ignored). |
 | POST | `/email-rules` | JWT | Create a rule (`type`, `matcher`, `matchValue`, `description?`, `isActive?`). Invalid regex → 400. |
 | GET | `/email-rules` | JWT | List rules. |
 | GET | `/email-rules/:id` | JWT | One rule. |
 | PATCH | `/email-rules/:id` | JWT | Update a rule. |
 | DELETE | `/email-rules/:id` | JWT | Delete a rule. |
 
-Planned (not in the code): Gmail polling ingestion, AI classification, `GET /email/logs`, reprocess, rule `type` filter.
+Planned (not in the code): AI classification, `GET /email/logs`, reprocess, rule `type` filter.
 
 ## Finance — `/finance`
 

@@ -23,7 +23,7 @@ const statusOf = (error: any): number =>
   Number(error?.status ?? error?.response?.status ?? error?.code);
 
 // Sự kiện không còn trên Google (đã bị xóa từ phía Google)
-const isGone = (error: unknown) => [404, 410].includes(statusOf(error));
+export const isGone = (error: unknown) => [404, 410].includes(statusOf(error));
 
 /**
  * Đồng bộ MỘT CHIỀU Local -> Google Calendar. Local là nguồn dữ liệu gốc.

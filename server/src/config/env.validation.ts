@@ -102,6 +102,19 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   TELEGRAM_CHAT_ID?: string;
+
+  // Gmail Pub/Sub push: thiếu một trong ba thì POST /email/pubsub trả 503
+  @IsOptional()
+  @IsString()
+  GMAIL_PUBSUB_TOPIC?: string;
+
+  @IsOptional()
+  @IsString()
+  PUBSUB_PUSH_AUDIENCE?: string;
+
+  @IsOptional()
+  @IsString()
+  PUBSUB_PUSH_SERVICE_ACCOUNT?: string;
 }
 
 export function validate(config: Record<string, unknown>) {
