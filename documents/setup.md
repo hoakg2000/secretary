@@ -82,3 +82,9 @@ and delete any `DROP INDEX` for these names before applying.
 npx tsc --noEmit
 npm test
 ```
+
+`npm run test:int` runs the service-layer integration tests (`server/test/integration`) against a real Postgres. It
+needs only the docker `postgres` container: it creates the database `secretary_test` if missing, applies the
+migrations, and truncates every table before each test. It refuses any database whose name does not end in `_test`
+(override the URL with `TEST_DATABASE_URL`). Gemini, Google, Fish.audio, Telegram and the BullMQ queue are faked, so
+no Redis and no API key is used.
