@@ -1,63 +1,80 @@
+# Secretary — Product summary
+
+A personalized AI assistant for one primary user. The server (NestJS) ingests mail, keeps a finance ledger and a
+local calendar, and chats with a configurable character that remembers long-term facts.
+Routes are in `api.md`, tables in `db.md`.
+
+Tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built. `[De-scoped]` = decided against for now.
+
 ## Change log
 
 | Date | Change |
 |------|--------|
-| 2026-10-13 | Section C: added "Chat sessions and message storage" (D19) and the rule for what becomes a memory (D20); both planned, task 6.4. Hybrid memory is no longer described as "self-updating": chat is not written to the vector store unless the AI marks a message important. Memory decay is applied at query time only (D6). Section 2: the stack lines now name what is used (Prisma, Gemini). The rest of this file is not yet revised and still describes planned features as if built; the full rewrite is `next-steps.md` section 5.2. |
+| 2026-10-13 | Section C: added chat sessions and message storage and the rule for what becomes a memory. Hybrid memory is no longer described as "self-updating": chat is not written to the vector store unless the AI marks a message important. Memory decay is applied at query time only. Section 2: the stack lines now name what is used (Prisma, Gemini). |
+| 2026-10-16 | Rewritten: added a title and a status tag on every feature, checked against `api.md`, `db.md` and the code. De-scoped features are no longer described as built: Telegram quick-action buttons and push notifications, content-based email dedup, the daily time window and 3-hour quiet cron, two-way calendar sync, the mobile app. Chat storage and `characters.memory_rule` are now `[Implemented]`. Decision IDs and links to deleted planning files removed. |
+| 2026-10-16 | Review fixes: a duplicate email still `PENDING` is queued again; Google scopes list `userinfo.email`. |
 
-## I. Project Description & Core Business Workflows
+## 1. Core business workflows
 
-The system is a **Personalized AI Assistant**, customized according to user settings and operating synchronously across a Web Dashboard (Next.js) and Mobile App (React Native) for a primary single user with multi-platform synchronization.
+### A. Google ecosystem integration (email and calendar)
 
-### 1. Core Business Workflows
+- **Google OAuth2** `[Implemented]`: tokens stored encrypted, refreshed automatically. Scopes: Gmail
+  (`https://mail.google.com/`), Calendar (`https://www.googleapis.com/auth/calendar`) and `https://www.googleapis.com/auth/userinfo.email`.
+- **Real-time email ingestion** `[Implemented]`: Gmail Pub/Sub push to `POST /email/pubsub` (Google ID token
+  checked; fetches new INBOX mail since the stored history ID), and manual `POST /email/ingest`. Not yet run
+  against the real Google services.
+- **Queue** `[Implemented]`: BullMQ on Redis; job state lives in Redis.
+- **Pre-filtering** `[Implemented]`:
+  - Blacklist: saved `SKIPPED`, never sent to the model.
+  - MoneyList and whitelist: select a more detailed prompt. Mail that matches no rule is still classified.
+- **Deduplication** `[Implemented]`: on `message_id` only; a duplicate that was already processed is ignored (one still `PENDING` is queued again). Hashing `Message-ID` plus body is
+  `[De-scoped]`.
+- **AI classification** `[Implemented]`: one Gemini call per queued email, no tools.
+  - `TRANSACTION`: creates a transaction when exactly one active account matches the extracted account number /
+    bank code and currency.
+  - `EVENT`: creates a calendar event.
+  - Otherwise a short summary, stored in `email_logs.ai_summary`.
+  - Urgent mail sends a proactive notification (Telegram text).
+- **Email log listing and reprocess** `[Planned]`.
+- **Telegram quick-action inline buttons and push notifications** `[De-scoped]`. Telegram text messages only.
 
-#### A. Google Ecosystem Integration (Email & Calendar)
+### B. Financial ledger and local calendar
 
-- **Integration Method:** Google OAuth2 with automatic Token Refresh mechanism & Google Pub/Sub Webhooks for real-time email ingestion.
-- **Google OAuth Scopes:** Scopes covering both Gmail API (`https://mail.google.com/`) and Google Calendar API (`https://www.googleapis.com/auth/calendar`).
-- **Email Flow:** Automatic ingestion of forwarded emails from multiple secondary addresses into the primary inbox.
-- **Pre-filtering & Async Processing Pipeline:**
-  - **Architecture:** State Machine + Redis Queue (BullMQ in NestJS).
-  - **Pre-filtering Engine:**
-    - **Blacklist:** Immediate bypass; skips AI pipeline completely.
-    - **MoneyList:** Fast-track identification of bank and e-wallet notification formats.
-    - _Note:_ Pre-filtering optimizes token usage and routes payloads before passing to the LLM.
-  - **Deduplication & Idempotency:** Hash `Message-ID` + Body payload to guarantee zero duplicate financial or calendar entries upon worker retries.
-- **AI Analysis & Classification Pipeline:**
-  - **Category 1 — Balance Fluctuation:** Extract amount, transaction type (income/expense), counterparty, and bank account/wallet ID. Update financial tables atomically.
-  - **Category 2 — Schedules & Appointments:** Extract start/end time, location, attendees, and intent. Synchronize automatically with Google Calendar API.
-  - **Category 3 — General/Others:** Summarize content into short structured highlights.
-  - **Emergency Alert Mechanism:** High-priority or urgent emails trigger instant real-time push notifications via Telegram Bot API with quick-action inline buttons.
+- **Multi-account ledger** `[Implemented]`: each account keeps a cached balance, changed only together with a
+  transaction row. Totals per currency at `GET /finance/accounts/total-balance`; paginated transaction search.
+- **Finance summary route, update of transactions and categories** `[Planned]`. The AI tool `get_financial_summary`
+  exists.
+- **Local calendar** `[Implemented]`: local is the source of truth; `POST /calendar/sync` and a cron push changes one
+  way to Google Calendar.
+- **Pull sync from Google and conflict handling** `[De-scoped]`.
 
-#### B. Financial Ledger & Local Calendar Rules
+### C. Interactive chat and proactive AI agent
 
-- **Multi-Account Financial Ledger:**
-  - Each bank or wallet account maintains a real-time balance cache for instant inspection without requiring runtime aggregations.
-  - An aggregated **Total Account** balance is maintained at top-level, with individual bank/wallet breakdowns accessible via drill-down ("See More").
-- **Local Calendar Proxy:**
-  - Maintains a local database calendar with a background sync engine to write and log changes locally before propagating to the Google Calendar API, minimizing external rate limits and latency.
+- **Interactive chat** `[Implemented]`: SSE stream, Gemini function calling over finance, calendar, memory and
+  notification tools. Write tools are not run until the user confirms.
+- **Character and persona configuration** `[Implemented]`: system prompt, tone, identity, background, relationship
+  dynamics; one active character.
+- **Chat sessions and message storage** `[Implemented]`: every session and the full text of every message are stored
+  in `chat_sessions` / `chat_messages`. The server supplies the history of a turn. Chat is not embedded and not
+  searched by vector.
+- **Hybrid long-term memory (`pgvector` + full-text search)** `[Implemented]`: table `ai_memories` (1536-dimension
+  embedding); vector cosine similarity combined with `tsvector` search.
+  - **What becomes a memory** `[Implemented]`: only a chat message the AI marks as important, by the rule in
+    `characters.memory_rule` (built-in default when null). Memories can also be added manually.
+  - **Memory decay** `[Implemented]`: `S(t) = S0 · e^(−λt)`, applied when memories are searched. A decay job and
+    pruning are `[De-scoped]`.
+- **Voice synthesis (TTS)** `[Implemented]`: Fish.audio, MP3 stream with the character's voice.
+- **Proactive agent**:
+  - Telegram text delivery, `POST /proactive/trigger` `[Implemented]`.
+  - Reminder cron for events starting within 15 minutes `[Implemented]`.
+  - Instant trigger on urgent mail `[Implemented]`.
+  - Daily time-window evaluation and 3-hour quiet cron `[De-scoped]`.
 
-#### C. Interactive Chatbox & Proactive AI Agent
+## 2. Tech stack and architecture
 
-- **Interactive Chat:** Support conversational interactions, real-time schedule queries, and financial summaries.
-- **Persona & Character Configuration:** Customizable system prompts, tone, background context, and relationship dynamics.
-- **Chat Sessions & Message Storage** `[Planned]` (D19, task 6.4):
-  - Every chat session and the full text of every message, sent by the user or received from the model, is stored in relational tables (`chat_sessions`, `chat_messages`). The server supplies the history of a turn.
-  - Chat sessions, messages and history are **not** stored in the vector database: no embedding per message.
-  - Today (before task 6.4) the server stores no chat; the client keeps the conversation and sends the recent turns with each request.
-- **Hybrid Long-Term Memory (`pgvector` + FTS)** `[Implemented]`:
-  - PostgreSQL + `pgvector` extension, table `ai_memories` (1536-dimension embedding).
-  - **What becomes a memory** `[Planned]` (D20): only a chat message the AI agent marks as important. The agent decides by a rule in its system prompt; the rule is configured per character. Everything else stays in the chat tables only. Memories can also be added manually.
-  - **Hybrid Search:** Combine Vector Cosine Similarity (semantic search) with PostgreSQL Full-Text Search (`tsvector` for exact keyword/code matching).
-  - **Memory Decay:** Exponential decay $S(t) = S_0 \cdot e^{-\lambda t}$, applied when memories are searched, to prioritize recent relevant memories. There is no decay job (D6).
-- **Voice Synthesis (TTS):** Integration with Fish.audio API for low-latency streaming TTS matching the configured Persona voice.
-- **Proactive AI Agent (Event-driven & Hybrid Trigger):**
-  - **Instant Trigger:** Executed on urgent emails, high-priority calendar events, or incoming webhooks.
-  - **Fixed Time Window Trigger:** Daily scheduled evaluation (e.g., 5:20 PM) where the agent assesses recent context and autonomously decides whether to initiate a conversation.
-  - **Fallback Trigger (3-hour Quiet Cron):** Runs every 3 hours **only** if zero activity (no emails, no chats, no DB mutations) occurred during that time window.
-
-### 2. Tech Stack & System Architecture
-
-- **Backend:** NestJS (TypeScript, Modular Architecture, BullMQ, Prisma).
-- **Database:** PostgreSQL (Relational + `pgvector` + `tsvector`), Redis (Caching & Queue).
-- **Frontend:** Next.js 14+ (App Router, Web Dashboard), React Native (Mobile App).
-- **External Integrations:** Google APIs (Gmail, Calendar, Pub/Sub), Telegram Bot API, Fish.audio TTS API, Google Gemini API (chat, classification, embeddings).
+- **Backend** `[Implemented]`: NestJS (TypeScript, modular), BullMQ, Prisma.
+- **Database** `[Implemented]`: PostgreSQL (relational + `pgvector` + `tsvector`), Redis (queue).
+- **Web dashboard** (Next.js, App Router) `[Planned]`: `web-client/` is empty.
+- **Mobile app** (React Native) `[De-scoped]`.
+- **External integrations** `[Implemented]`: Google APIs (Gmail, Calendar, Pub/Sub), Telegram Bot API, Fish.audio
+  TTS, Google Gemini (chat, classification, embeddings).

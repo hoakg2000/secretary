@@ -1,165 +1,56 @@
-# Character & Persona Service
+# Character Service
 
-- **General Description**: Manages core business logic for AI Character lifecycle (creation, modification, activation, deletion) and their associated Persona attribute configurations (system prompts, tone, identity, knowledge background, relationship dynamics, etc.).
-- **Accessed Database Tables**:
-  - `characters`
-  - `personas`
+- **Class**: `CharacterService` — `server/src/character/character.service.ts`
+- **Description**: characters and personas. A character is the AI's identity; its personas are joined into the chat
+  system instruction by `AgentService`. Exactly one character may be active.
+- **Tables**: `characters`, `personas` (read, write). Read elsewhere: `AgentService` (persona, `memory_rule`),
+  `TtsService` (`voice_id`).
+- **No AI tool** in this service.
 
----
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
 
-## List of Methods
+## Change log
 
-### 1. getCharacters
-
-- **Task Description**: Retrieves all registered AI character records from the `characters` table, including their active status and voice metadata.
-- **Accessed Tables**: `characters` (Read)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
-
-#### Input / Output
-
-- **Input**: None
-
-- **Output**:
-  - `Promise<CharacterResponseDto[]>`: Array of character records.
+| Date | Change |
+|------|--------|
+| 2026-10-16 | Rewritten from the code. Single-active rule is enforced by the partial unique index `characters_single_active` plus a deactivate-then-write transaction. Added `setActiveCharacter` and the persona ownership check. `memory_rule` is stored as given. |
 
 ---
 
-### 2. createCharacter
+## Methods
 
-- **Task Description**: Creates a new AI character entry in `characters` with `name`, `voice_id` (Fish.audio), and `source`. Manages single active character state logic if marked active.
-- **Accessed Tables**: `characters` (Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
+### 1. createCharacter(dto) `[Implemented]`
 
-#### Input / Output
+- One transaction: when `dto.isActive`, set `is_active = false` on every active character; then create the row.
+- Returns the character with `personas`.
+- **Tables**: `characters` (update, create).
 
-- **Input**:
-  - `dto`: `CreateCharacterDto` - Character name, voice ID, source origin, and optional active flag.
+### 2. findAllCharacters() `[Implemented]`
 
-- **Output**:
-  - `Promise<CharacterResponseDto>`: Newly created character entity representation.
+- All characters with `personas`, newest `created_at` first.
 
----
+### 3. findCharacterById(id) `[Implemented]`
 
-### 3. updateCharacter
+- Character with `personas`; `NotFoundException` when missing. Used by every method below as the existence check.
 
-- **Task Description**: Updates AI character details (Name, Voice ID, Source, Active status) by ID. When activating a character, deactivates other characters to maintain a single active persona.
-- **Accessed Tables**: `characters` (Read, Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
+### 4. updateCharacter(id, dto) `[Implemented]`
 
-#### Input / Output
+- Existence check, then one transaction: when `dto.isActive`, deactivate the other active characters; update the row.
+  `dto` is written as given, including `memoryRule`.
 
-- **Input**:
-  - `id` (`string`): Character UUID.
-  - `dto`: `UpdateCharacterDto` - Partial update properties for character.
+### 5. removeCharacter(id) `[Implemented]`
 
-- **Output**:
-  - `Promise<CharacterResponseDto>`: Updated character entity representation.
+- Existence check, then delete. `personas` cascade; `chat_sessions.character_id` is set null by the database.
 
----
+### 6. setActiveCharacter(id) `[Implemented]`
 
-### 4. activateCharacter
+- Existence check, then one transaction: deactivate the others, activate this one. Returns it with `personas`.
 
-- **Task Description**: Activates the specified character by setting its `is_active = true` in `characters`, and atomically sets all other character records to `is_active = false` within the same database transaction to guarantee only one character can be active at a time.
-- **Accessed Tables**: `characters` (Read, Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
+### 7. addPersona(characterId, dto) `[Implemented]`
 
-#### Input / Output
+- Existence check of the character, then create the persona (`type`, `value`).
 
-- **Input**:
-  - `id` (`string`): Character UUID to activate.
+### 8. updatePersona(characterId, personaId, dto) / removePersona(characterId, personaId) `[Implemented]`
 
-- **Output**:
-  - `Promise<CharacterResponseDto>`: The newly activated character entity with `isActive = true`.
-
----
-
-### 5. deleteCharacter
-
-- **Task Description**: Permanently deletes an AI character and cascades deletion to all associated persona configurations in `personas`.
-- **Accessed Tables**: `characters` (Delete), `personas` (Delete)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
-
-#### Input / Output
-
-- **Input**:
-  - `id` (`string`): Character UUID to delete.
-
-- **Output**:
-  - `Promise<DeleteCharacterResponseDto>`: Success status and confirmation message.
-
----
-
-### 6. getPersonasByCharacterId
-
-- **Task Description**: Fetches all persona attribute configurations (Prompt, Tone, Identity, Knowledge Background, Relationship Dynamics, Other) assigned to a given character from `personas`.
-- **Accessed Tables**: `characters` (Read), `personas` (Read)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
-
-#### Input / Output
-
-- **Input**:
-  - `characterId` (`string`): Parent character UUID.
-
-- **Output**:
-  - `Promise<PersonaResponseDto[]>`: Array of persona configurations for the target character.
-
----
-
-### 7. addPersona
-
-- **Task Description**: Validates character existence and adds a new persona attribute configuration (`type` + `value`) to the target character in `personas`.
-- **Accessed Tables**: `characters` (Read), `personas` (Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
-
-#### Input / Output
-
-- **Input**:
-  - `characterId` (`string`): Target character UUID.
-  - `dto`: `CreatePersonaDto` - DTO containing `type` (enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`) and `value` (prompt content).
-
-- **Output**:
-  - `Promise<PersonaResponseDto>`: Newly created persona attribute entity representation.
-
----
-
-### 8. updatePersona
-
-- **Task Description**: Validates character ownership and updates an existing persona attribute's type or value in `personas`.
-- **Accessed Tables**: `personas` (Read, Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
-
-#### Input / Output
-
-- **Input**:
-  - `characterId` (`string`): Parent character UUID.
-  - `personaId` (`string`): Target persona UUID.
-  - `dto`: `UpdatePersonaDto` - DTO containing updated `type` (enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`) and/or `value`.
-
-- **Output**:
-  - `Promise<PersonaResponseDto>`: Updated persona attribute entity representation.
-
----
-
-### 9. deletePersona
-
-- **Task Description**: Validates character ownership and deletes the specific persona attribute configuration from `personas`.
-- **Accessed Tables**: `personas` (Delete)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
-
-#### Input / Output
-
-- **Input**:
-  - `characterId` (`string`): Parent character UUID.
-  - `personaId` (`string`): Target persona UUID.
-
-- **Output**:
-  - `Promise<DeletePersonaResponseDto>`: Deletion success confirmation status.
+- Private `findPersona` looks up `id = personaId AND character_id = characterId`; `NotFoundException` otherwise, so a
+  persona cannot be changed through another character's URL. Then update or delete.

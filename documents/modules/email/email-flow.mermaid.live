@@ -1,77 +1,83 @@
+%% Email module flow, drawn from server/src/email (checked 2026-10-16).
+%% Change log
+%% 2026-10-16: Rewritten from the code. Pub/Sub push route is /email/pubsub with a Google ID token check; dedup is
+%%             the unique message_id only (no SHA-256 hash); rule matching happens at ingest, not in the worker;
+%%             the worker classifies every queued email with one Gemini call and acts on the model's category.
+%% 2026-10-16: Review fix: the urgent notice goes to the Telegram Bot API participant, not Google.
 sequenceDiagram
-autonumber
-actor User as User / Admin
-participant Google as Google Server (Pub/Sub)
-participant Ctrl as EmailController
-participant Service as EmailService / EmailRuleService
-participant Queue as Redis / BullMQ (email-processing)
-participant Worker as EmailProcessor (Worker)
-participant DB as PostgreSQL (Prisma)
+    autonumber
+    actor Owner as Owner (JWT)
+    participant Google as Google (Pub/Sub push, Gmail API)
+    participant Tg as Telegram Bot API
+    participant Ctrl as EmailController
+    participant Push as GmailPushService
+    participant Svc as EmailService / EmailRuleService
+    participant Queue as Redis / BullMQ (email-processing)
+    participant Worker as EmailProcessor
+    participant Ai as EmailAiService (Gemini, no tools)
+    participant DB as PostgreSQL
 
-    %% -------------------------------------------------------------
-    %% LUỒNG 1: QUẢN LÝ EMAIL RULES (CRUD)
-    %% -------------------------------------------------------------
     rect rgb(240, 248, 255)
-    note over User, DB: LUỒNG 1: QUẢN LÝ EMAIL RULES (REST API)
-    User->>Ctrl: POST /api/v1/email-rules (Tạo Rule: blacklist/moneylist/whitelist)
-    Ctrl->>Service: emailRuleService.create(dto)
-    Service->>DB: INSERT INTO email_rules
-    DB-->>Service: EmailRule Record
-    Service-->>Ctrl: EmailRule Record
-    Ctrl-->>User: 201 Created { statusCode, message, data }
+    note over Owner, DB: 1. Email rules (REST)
+    Owner->>Ctrl: POST / GET / PATCH / DELETE /email-rules
+    Ctrl->>Svc: EmailRuleService create / findAll / findOne / update / remove
+    Svc->>DB: email_rules (regex checked: max 200 characters, valid syntax)
+    Ctrl-->>Owner: { statusCode, message, data }
     end
 
-    %% -------------------------------------------------------------
-    %% LUỒNG 2: WEBHOOK INGESTION & PRODUCER
-    %% -------------------------------------------------------------
     rect rgb(255, 245, 238)
-    note over Google, Queue: LUỒNG 2: TIẾP NHẬN EMAIL WEBHOOK & PRODUCER
-    Google->>Ctrl: POST /api/v1/email/webhook (EmailWebhookDto: messageId, sender, rawBody...)
-    Ctrl->>Service: emailService.createEmailLog(dto)
+    note over Google, DB: 2. Gmail push ingestion
+    Google->>Ctrl: POST /email/pubsub (Bearer Google ID token)
+    Ctrl->>Push: verifyPushToken (audience, service account)
+    alt token missing or wrong
+        Push-->>Google: 401
+    else Pub/Sub not configured
+        Push-->>Google: 503
+    end
+    Ctrl->>Push: runPass (one at a time, else 503)
+    Push->>DB: read users.gmail_history_id
+    Push->>Google: Gmail history.list since the stored ID (fallback: INBOX, last day)
+    loop each new message
+        Push->>Google: messages.get (full)
+        Push->>Svc: EmailService.ingest({ messageId, sender, subject, rawBody })
+    end
+    Push->>DB: save the new gmail_history_id after the whole pass
+    Ctrl-->>Google: 200 { fetched }
+    end
 
     rect rgb(255, 250, 205)
-    note over Service, DB: Kiểm tra Idempotency (Chống trùng lặp)
-    Service->>Service: TÍnh dedupHash = SHA256(messageId + rawBody)
-    Service->>DB: SELECT FROM email_logs WHERE messageId OR dedupHash
-    alt Email đã tồn tại (Duplicate)
-        DB-->>Service: EmailLog Record
-        Service-->>Ctrl: return null
-        Ctrl-->>Google: 200 OK (Bỏ qua - Duplicate Email)
-    else Email chưa tồn tại (Valid)
-        DB-->>Service: null
-        Service->>DB: INSERT INTO email_logs (status: PENDING)[cite: 1]
-        DB-->>Service: New EmailLog Record
-        Service-->>Ctrl: New EmailLog Record
-        Ctrl->>Queue: emailQueue.add('process-email-job', payload)
-        Queue-->>Ctrl: Job ID
-        Ctrl-->>Google: 200 OK { emailLogId, jobId }
+    note over Owner, Queue: 3. Ingest (also POST /email/ingest, JWT)
+    Svc->>DB: INSERT email_logs (status PENDING)
+    alt unique message_id violated
+        Svc->>DB: read the existing row
+        alt status is not PENDING
+            Svc-->>Ctrl: null (duplicate ignored)
+        else still PENDING
+            note over Svc: continue with the existing row
+        end
     end
+    Svc->>DB: classify: active email_rules, blacklist > moneylist > whitelist
+    alt blacklist
+        Svc->>DB: status = SKIPPED (not queued)
+    else other
+        Svc->>Queue: add process-email-job (jobId = email log ID, priority 1 / 2 / 3, 3 attempts)
     end
     end
 
-    %% -------------------------------------------------------------
-    %% LUỒNG 3: BULLMQ WORKER XỬ LÝ NGẦM
-    %% -------------------------------------------------------------
     rect rgb(245, 255, 250)
-    note over Queue, DB: LUỒNG 3: XỬ LÝ NGẦM VÀ PHÂN LOẠI EMAIL (BULLMQ WORKER)
-    Queue->>Worker: Job 'process-email-job'
-    Worker->>DB: SELECT FROM email_rules WHERE isActive = true[cite: 1]
-    DB-->>Worker: List<EmailRule>
-
-    Worker->>Worker: Khớp dữ liệu (sender / keyword / regex)[cite: 1]
-
-    alt Khớp BLACKLIST
-        Worker->>DB: UPDATE email_logs SET status = 'SKIPPED'[cite: 1]
-    else Khớp MONEYLIST
-        Worker->>DB: UPDATE email_logs SET status = 'PROCESSED'[cite: 1]
-        note over Worker: Chuẩn bị Hook kích hoạt trích xuất tài chính (Bước 4)[cite: 1]
-    else Khớp WHITELIST
-        Worker->>DB: UPDATE email_logs SET status = 'PROCESSED'[cite: 1]
-        note over Worker: Chuẩn bị Hook trích xuất sự kiện Lịch / AI Memory (Bước 5 & 6)[cite: 1]
-    else Không khớp Rule nào
-        Worker->>DB: UPDATE email_logs SET status = 'SKIPPED'[cite: 1]
+    note over Queue, DB: 4. Worker
+    Queue->>Worker: process-email-job
+    Worker->>DB: status already PROCESSED? then return
+    Worker->>Ai: classify(email, ruleType)
+    Ai-->>Worker: category, urgent, summary, transaction?, event?
+    alt TRANSACTION and exactly one active account matches
+        Worker->>DB: FinanceService.createTransaction (unique email_log_id)
+    else EVENT
+        Worker->>DB: CalendarService.createEvent (sync state DIRTY)
     end
-
-    DB-->>Worker: Updated EmailLog
-    Worker-->>Queue: Complete Job
+    Worker->>DB: email_logs status = PROCESSED, ai_summary
+    opt urgent
+        Worker->>Tg: ProactiveService, Telegram text
+    end
+    note over Worker, DB: after the 3rd failed attempt: status = FAILED
     end

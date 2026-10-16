@@ -1,58 +1,56 @@
+%% Finance module flow, drawn from server/src/finance (checked 2026-10-16).
+%% Change log
+%% 2026-10-16: Translated to English and checked against the code. Removed "Mobile App" (de-scoped); email
+%%             transactions arrive through EmailProcessor, not directly from Pub/Sub.
+%% 2026-10-16: Review fixes: backslash-n in node labels replaced by <br>; semicolon removed from an edge label.
 flowchart TD
-    %% SUBGRAPH: EXTERNAL ACTORS & CLIENTS
-    subgraph Clients["Tương tác bên ngoài / Client Interface"]
-        WebDashboard["Web Dashboard / Mobile App"]
-        GooglePubSub["Google Pub/Sub / Email Webhook"]
-        AiEngine["Gemini AI Engine (Function Calling)"]
+    subgraph Clients["Callers"]
+        Client["Client (JWT)"]
+        Worker["EmailProcessor (email classified as TRANSACTION)"]
+        AiEngine["Gemini function calling (AgentService)"]
     end
 
-    %% SUBGRAPH: GUARDS & CONTROLLERS
-    subgraph ControllerLayer["Finance Controller Layer (REST API)"]
+    subgraph ControllerLayer["FinanceController /api/v1/finance"]
         JwtGuard["JwtAuthGuard"]
-        
-        BankCtrl["BankAccount Endpoints\n- GET/POST/PATCH/DELETE /accounts\n- GET /accounts/total-balance"]
-        CatCtrl["Category Endpoints\n- GET/POST/DELETE /categories"]
-        TxCtrl["Transaction Endpoints\n- POST /transactions\n- POST /transactions/search\n- GET/DELETE /transactions/:id"]
+        BankCtrl["Accounts<br>- POST, GET /accounts<br>- GET /accounts/total-balance<br>- GET, PATCH, DELETE /accounts/:id<br>- PATCH /accounts/:id/balance"]
+        CatCtrl["Categories<br>- POST, GET /categories<br>- DELETE /categories/:id"]
+        TxCtrl["Transactions<br>- POST /transactions<br>- POST /transactions/search<br>- GET, DELETE /transactions/:id"]
     end
 
-    %% SUBGRAPH: SERVICE & BUSINESS LOGIC
-    subgraph ServiceLayer["Finance Service Layer"]
-        BankService["Bank Account Management"]
-        CatService["Category Management"]
-        TxService["Transaction Management & Auto-Balance Logic"]
-        AiToolReg["@AiTool Decorator Handlers\n- get_financial_summary\n- create_financial_transaction\n- search_financial_transactions"]
+    subgraph ServiceLayer["FinanceService"]
+        BankService["Accounts: create, list, get, update, delete or deactivate, adjustBalance, getTotalBalance"]
+        CatService["Categories: create, list, delete"]
+        TxService["Transactions: create, search, get, delete (balance moves in the same DB transaction)"]
+        AiToolReg["AI tools<br>- get_financial_summary<br>- search_financial_transactions<br>- create_financial_transaction (needs confirmation)"]
     end
 
-    %% SUBGRAPH: DATABASE & MODELS
-    subgraph DatabaseLayer["Database Layer (Prisma ORM)"]
-        BankAccountDB[("bank_accounts\n(cached_balance, bank_code, account_number)")]
-        CategoryDB[("categories\n(name, type, icon, budget_limit)")]
-        TransactionDB[("transactions\n(amount, type, counterparty, transaction_time)")]
-        EmailLogDB[("email_logs\n(message_id, sender, status)")]
+    subgraph DatabaseLayer["PostgreSQL (Prisma)"]
+        BankAccountDB[("bank_accounts: cached_balance")]
+        CategoryDB[("categories")]
+        TransactionDB[("transactions: unique email_log_id")]
+        EmailLogDB[("email_logs")]
     end
 
-    %% FLOWS & CONNECTIONS
-    WebDashboard -->|1. JWT Auth Request| JwtGuard
+    Client -->|JWT| JwtGuard
     JwtGuard --> BankCtrl
     JwtGuard --> CatCtrl
     JwtGuard --> TxCtrl
-
-    GooglePubSub -->|2. Email biến động số dư| EmailLogDB
-    EmailLogDB -.->|Gắn emailLogId khi tạo Tx| TxService
-
-    AiEngine -->|3. Gọi AI Tools| AiToolReg
-    AiToolReg --> BankService
-    AiToolReg --> TxService
 
     BankCtrl --> BankService
     CatCtrl --> CatService
     TxCtrl --> TxService
 
+    Worker -->|createTransaction with emailLogId| TxService
+    AiEngine -->|read tools run, create after user confirms| AiToolReg
+    AiToolReg --> BankService
+    AiToolReg --> TxService
+
     BankService -->|CRUD| BankAccountDB
     CatService -->|CRUD| CategoryDB
+    TxService -->|insert or delete| TransactionDB
+    TxService -->|increment or decrement| BankAccountDB
+    BankService -->|adjustBalance inserts a ledger row| TransactionDB
 
-    TxService -->|Tạo / Xóa Transaction| TransactionDB
-    TxService -->|4. Tự động tính toán & cập nhật cached_balance| BankAccountDB
-    TransactionDB -.->|FK: accountId| BankAccountDB
-    TransactionDB -.->|FK: categoryId| CategoryDB
-    TransactionDB -.->|FK: emailLogId| EmailLogDB
+    TransactionDB -.->|FK account_id, restrict| BankAccountDB
+    TransactionDB -.->|FK category_id, set null| CategoryDB
+    TransactionDB -.->|FK email_log_id, set null| EmailLogDB

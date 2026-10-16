@@ -1,119 +1,72 @@
-# Authentication & Session Controller
+# Auth Controller
 
-- **Base Endpoint**: `/api/v1/auth`
-- **General Description**: Handles Master User authentication, token issuance and refresh, session termination, active session retrieval, and Google OAuth2 integration (connect & callback for Gmail and Calendar APIs).
+- **Class**: `AuthController` — `server/src/auth/auth.controller.ts`
+- **Base endpoint**: `/api/v1/auth`
+- **Auth**: global `JwtAuthGuard`; routes marked `@Public()` are open. The access token is checked against
+  `user_sessions` on every request (`JwtStrategy`), so ending a session ends its access token.
+- **Response**: `{ statusCode, message, data }`.
+- **Description**: login of the master user, refresh-token rotation, logout, current session, Google OAuth2 connect
+  and callback (Gmail and Calendar).
 
----
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
 
-## List of Endpoints
+## Change log
 
-### 1. Master User Login
-
-- **Endpoint**: `POST /api/v1/auth/login`
-- **Guard / Auth**: None (Public)
-- **Description**: Authenticates the Master User credentials. Upon successful validation, issues an Access Token in the response body and sets an HTTP-Only Refresh Token cookie. It also creates a new active record in `user_sessions` and records token metadata in `refresh_tokens`.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `LoginDto`
-  - `username` (`string`, required): Master User username or email address.
-  - `password` (`string`, required): Plaintext password for authentication.
-  - `deviceId` (`string`, optional): Unique client device identifier.
-  - `userAgent` (`string`, optional): User-Agent string from the HTTP request header.
-
-- **Response DTO**: `LoginResponseDto`
-  - `accessToken` (`string`): Issued JWT Access Token.
-  - `tokenType` (`string`): Token type identifier (e.g., `Bearer`).
-  - `expiresIn` (`number`): Access Token expiration time in seconds.
-  - `session` (`SessionInfoDto`): Newly created user session summary.
+| Date | Change |
+|------|--------|
+| 2026-10-16 | Rewritten from the code. `LoginDto` is `email` + `password` (was `username`, `deviceId`, `userAgent`); `user_sessions.device_id` is never written. Login returns `accessToken` and `user` only (no `tokenType`, `expiresIn`, `session`). Added `POST /auth/refresh` rotation and replay rule, `GET /auth/session`, `GET /auth/google/connect` and the `state` check on the callback. The refresh token is stored as a SHA-256 hash, not encrypted. |
 
 ---
 
-### 2. Refresh Access Token
+## Endpoints
 
-- **Endpoint**: `POST /api/v1/auth/refresh`
-- **Guard / Auth**: None (Validates Refresh Token from HTTP-Only cookie or payload)
-- **Description**: Verifies the provided Refresh Token against active records in `refresh_tokens`. If valid and non-revoked, issues a new JWT Access Token. Supports rotation/replay detection to safeguard session security.
+### 1. Login — `POST /api/v1/auth/login` `[Implemented]`
 
-#### Data Transfer Objects (DTO)
+- **Handler**: `login(loginDto, req, res)` → `AuthService.login`
+- **Auth**: `@Public()`, `ThrottlerGuard` (5 per minute, key `req.ip`; 429 beyond that).
+- **Request** `LoginDto`: `email` (valid email, required), `password` (string, min 6, required).
+- **Does**: creates a `user_sessions` row (with `User-Agent` and `req.ip`), signs the tokens, stores the refresh
+  token hash. Sets the `refreshToken` cookie: `httpOnly`, `sameSite: lax`, path `/api/v1/auth`, `secure` when
+  `NODE_ENV=production`, lifetime from the token's `exp`.
+- **Response `data`**: `{ accessToken, user: { id, email } }`.
+- 401 for an unknown email, a user without a password, an inactive user, or a wrong password (same message).
 
-- **Request DTO**: `RefreshTokenDto`
-  - `refreshToken` (`string`, optional): Refresh Token value if not sent via HTTP-Only cookie.
+### 2. Refresh — `POST /api/v1/auth/refresh` `[Implemented]`
 
-- **Response DTO**: `RefreshTokenResponseDto`
-  - `accessToken` (`string`): Newly issued JWT Access Token.
-  - `tokenType` (`string`): Token type identifier (e.g., `Bearer`).
-  - `expiresIn` (`number`): Access Token expiration time in seconds.
+- **Handler**: `refreshAccessToken(req, body, res)` → `AuthService.refreshAccessToken`
+- **Auth**: `@Public()`.
+- **Request** `RefreshTokenDto`: `refreshToken?` (string). The cookie wins; the body is the fallback.
+- **Does**: rotates the token (old one revoked, new one issued, same transaction) and sets a new cookie.
+- **Response `data`**: `{ accessToken }`, plus `refreshToken` only when no cookie was sent.
+- 401 for a bad, expired or unknown token. Presenting an already rotated token deletes the whole session.
 
----
+### 3. Logout — `POST /api/v1/auth/logout` `[Implemented]`
 
-### 3. Terminate Login Session (Logout)
+- **Handler**: `logout(req, body, res)` → `AuthService.logout`
+- **Auth**: JWT.
+- **Request** `LogoutDto`: `sessionId?` (UUID). Omitted → the current session. Another session is accepted only
+  when it belongs to the same user.
+- Clears the cookie only when the current session ends. Response has no `data`.
 
-- **Endpoint**: `POST /api/v1/auth/logout`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Terminates the current login session by marking or deleting the corresponding record in `user_sessions`, revoking the Refresh Token in `refresh_tokens`, and clearing the HTTP-Only cookie.
+### 4. Current session — `GET /api/v1/auth/session` `[Implemented]`
 
-#### Data Transfer Objects (DTO)
+- **Handler**: `getActiveSession(req)` → `AuthService.getActiveSession`
+- **Auth**: JWT.
+- **Response `data`**: `{ sessionId, ipAddress, userAgent, lastActiveAt, createdAt, user: { id, email, isActive, createdAt } }`.
+  Also updates `last_active_at`.
 
-- **Request DTO**: `LogoutDto`
-  - `sessionId` (`string`, optional): Specific session ID to terminate. Defaults to current active session if omitted.
+### 5. Google connect URL — `GET /api/v1/auth/google/connect` `[Implemented]`
 
-- **Response DTO**: `LogoutResponseDto`
-  - `success` (`boolean`): Indicates whether the logout operation was successful.
-  - `message` (`string`): Confirmation message detailing session termination.
+- **Handler**: `getGoogleConnectUrl(req)` → `AuthService.getGoogleConnectUrl`
+- **Auth**: JWT.
+- **Response `data`**: `{ url }`. Offline access, forced consent, scopes `https://mail.google.com/`,
+  `https://www.googleapis.com/auth/calendar`, `https://www.googleapis.com/auth/userinfo.email`. The `state` is a
+  JWT (`typ: oauth_state`) valid 10 minutes that carries the user ID.
 
----
+### 6. Google callback — `GET /api/v1/auth/google/callback` `[Implemented]`
 
-### 4. Retrieve Active Session Information
-
-- **Endpoint**: `GET /api/v1/auth/session`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Fetches current active session details from `user_sessions` and current user metadata from `users` based on the authenticated JWT Access Token.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `GetSessionQueryDto`
-  - None (Uses Access Token payload from headers)
-
-- **Response DTO**: `SessionInfoResponseDto`
-  - `id` (`string`): Session UUID.
-  - `userId` (`string`): Master User UUID.
-  - `deviceId` (`string`): Registered device identifier.
-  - `ipAddress` (`string`): IP address recorded during session creation/activity.
-  - `userAgent` (`string`): Browser or client user-agent string.
-  - `lastActiveAt` (`string`): ISO 8601 timestamp of last activity.
-  - `createdAt` (`string`): ISO 8601 timestamp of session creation.
-
----
-
-### 5. Connect Google Account
-
-- **Endpoint**: `GET /api/v1/auth/google/connect`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Generates and returns the Google OAuth2 consent screen setup URL for authenticating the Google account with full scopes for both Gmail API (`https://mail.google.com/`) and Google Calendar API (`https://www.googleapis.com/auth/calendar`).
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: None
-
-- **Response DTO**: `ConnectGoogleResponseDto`
-  - `url` (`string`): Google OAuth2 consent URL.
-
----
-
-### 6. Handle Google OAuth Callback
-
-- **Endpoint**: `GET /api/v1/auth/google/callback`
-- **Guard / Auth**: None
-- **Description**: Handles callback from Google OAuth2 server with Authorization Code, exchanges it for access & refresh tokens covering both Gmail and Google Calendar APIs, encrypts the tokens, and updates user profile settings in `users`.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `GoogleOAuthCallbackQueryDto`
-  - `code` (`string`, required): OAuth authorization code returned by Google.
-  - `state` (`string`, optional): Security state token.
-
-- **Response DTO**: `GoogleOAuthCallbackResponseDto`
-  - `success` (`boolean`): OAuth linkage success status.
-  - `message` (`string`): Outcome description message.
-
+- **Handler**: `handleGoogleCallback(code, state)` → `AuthService.handleGoogleCallback`
+- **Auth**: `@Public()` (Google redirects the browser here; the signed `state` is the proof).
+- **Query**: `code`, `state` (both required).
+- **Response `data`**: `{ success: true }`. Tokens are stored encrypted.
+- 400 for a missing `code`, an invalid, expired or wrong-type `state`, or when Google returns no access token.

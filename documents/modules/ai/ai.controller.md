@@ -5,62 +5,58 @@
 - **Auth**: every route needs the application JWT (global `JwtAuthGuard`).
 - **Response**: `{ statusCode, message, data }`, except the chat stream (SSE) and TTS (MP3 stream).
 - **Description**: streaming chat with the AI agent, confirmation of write actions the AI proposed, memory
-  management and search, text-to-speech. After task 6.4 also chat sessions and their stored messages.
+  management and search, text-to-speech, chat sessions and their stored messages.
 
-Status tags: `[Implemented]` = in the code today. `[Planned]` = designed in `next-steps.md` section 6.4, not built.
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built (none left in this file).
 
 ## Change log
 
 | Date | Change |
 |------|--------|
 | 2026-10-13 | Rewritten from the code. Base path is `/api/v1/ai-agent` (was documented as `/api/v1/ai`). Removed endpoints that do not exist: `PUT /memories/:id`, `POST /ai/proactive/trigger` (the route is `POST /proactive/trigger` in the proactive module), `POST /tts/stream` (the route is `POST /tts`). Memory search is `POST /memories/search`; `GET /memories` is a plain paginated list. Added the two action routes. Embedding is 1536 dimensions only. |
-| 2026-10-13 | Chat storage (D19, D20) `[Planned]`: the chat endpoint stores the message sent by the user and the message received from the model in `chat_messages`; body gains `sessionId`, loses `history`; new `session` frame; three session endpoints (8–10). Nothing of a chat is written to the vector store unless the AI marks the message important. |
+| 2026-10-13 | Chat storage: the chat endpoint stores the message sent by the user and the message received from the model in `chat_messages`; body gains `sessionId`, loses `history`; new `session` frame; three session endpoints (8–10). Nothing of a chat is written to the vector store unless the AI marks the message important. |
+| 2026-10-16 | Chat storage verified against the controller and `ChatStreamDto`: every `[Planned]` tag is now `[Implemented]`, the `history` field and the "stores no chat" text are removed. Handler is `chatStream(req.user.userId, dto)`. Added `ListChatDto` (`page`, `pageSize` max 50). Dead references to deleted planning files removed. |
+| 2026-10-16 | Review fix: endpoint 1 heading tagged `[Implemented]`. |
 
 ---
 
 ## Endpoints
 
-### 1. Streaming chat — `POST /api/v1/ai-agent/chat/stream`
+### 1. Streaming chat — `POST /api/v1/ai-agent/chat/stream` `[Implemented]`
 
-- **Handler**: `chatStream(dto)` → `AgentService.chatStream`
+- **Handler**: `chatStream(req.user.userId, dto)` → `AgentService.chatStream`
 - **Transport**: Server-Sent Events over POST (`@Sse('chat/stream', { method: RequestMethod.POST })`). Each
   `data:` line is one JSON frame.
 
 #### Request `[Implemented]` — `ChatStreamDto`
 
 - `message` (`string`, required): the user's message.
-- `characterId` (`string`, optional): character to answer as; default is the active character.
-- `history` (`{ role: 'user' | 'model', text }[]`, optional, max 20, each text max 4000 characters): the recent
-  turns, **held and sent by the client**. The server stores no chat.
+- `sessionId` (`string`, UUID, optional): the chat session to continue. Omitted → the server creates a session.
+- `characterId` (`string`, optional): character to answer as; default is the session's character, then the active
+  character.
 
-#### Request `[Planned]` — task 6.4
+There is no `history` field. The server reads the history from `chat_messages`.
 
-- `message` (`string`, required).
-- `sessionId` (`string`, optional): the chat session to continue. Omitted → the server creates a session.
-- `characterId` (`string`, optional).
-- `history` is removed. The server reads the history from `chat_messages`.
-
-#### What the endpoint does with the messages `[Planned]`
+#### What the endpoint does with the messages `[Implemented]`
 
 | Step | Action | Table |
 |------|--------|-------|
-| 1 | Resolve the session: create one for the JWT user, or load `sessionId` and require that it belongs to that user (otherwise 404, and no model call). | `chat_sessions` |
+| 1 | Resolve the session: create one for the JWT user (title = first 80 characters of the message), or load `sessionId` and require that it belongs to that user (otherwise 404 before the stream opens, and no model call). | `chat_sessions` |
 | 2 | Emit the first frame `{ "type": "session", "sessionId": "…" }`. | — |
 | 3 | **Store the message sent by the user**, in full, before the model is called. | `chat_messages` (`role: USER`) |
 | 4 | Load the last 20 earlier messages of the session as history for the model. | `chat_messages` (read) |
 | 5 | Run the turn: system instruction, model stream, tool loop (see `ai.service.md`). | — |
-| 6 | If the AI marked the user's message important (it called `save_user_memory`), a memory is written and linked to the message of step 3. | `ai_memories`, `chat_messages.memory_id` |
-| 7 | At `done`: **store the message received from the model**, in full (all `text` chunks joined), with the turn's tool calls. | `chat_messages` (`role: MODEL`) |
-| 8 | Update `last_message_at` of the session. | `chat_sessions` |
+| 6 | If the AI marked the user's message important (it called `save_user_memory`), the new memory is linked to the message of step 3. | `ai_memories`, `chat_messages.memory_id` |
+| 7 | When the turn ends normally: **store the message received from the model**, in full (all `text` chunks joined), with the turn's tool calls. | `chat_messages` (`role: MODEL`) |
+| 8 | `last_message_at` of the session is updated with every stored message. | `chat_sessions` |
 
 A turn that ends with an `error` frame, or that the client aborts, keeps the `USER` row and stores no `MODEL` row.
-The handler must read the user ID from the request (`req.user`); it does not today.
 
 #### Response frames
 
 | `type` | Fields | Status | Meaning |
 |--------|--------|--------|---------|
-| `session` | `sessionId` | `[Planned]` | First frame of every stream. |
+| `session` | `sessionId` | `[Implemented]` | First frame of every stream. |
 | `text` | `content` | `[Implemented]` | A chunk of the answer. |
 | `tool_call` | `tool`, `args` | `[Implemented]` | A read tool is running. |
 | `tool_result` | `tool`, `result` | `[Implemented]` | Its result. |
@@ -81,7 +77,7 @@ The handler must read the user ID from the request (`req.user`); it does not tod
 - **Handler**: `discardAction(actionId)` → `AgentService.discardAction`
 - **Response `data`**: `{ success: true }`. 404 as above.
 
-After task 6.4 neither route rewrites the stored `MODEL` message of the turn that proposed the action.
+Neither route rewrites the stored `MODEL` message of the turn that proposed the action.
 
 ---
 
@@ -99,7 +95,7 @@ After task 6.4 neither route rewrites the stored `MODEL` message of the turn tha
 
 ### 6. Delete a memory — `DELETE /api/v1/ai-agent/memories/:id` `[Implemented]`
 
-- **Handler**: `deleteMemory(id)` → `MemoryService.deleteMemory`. After task 6.4 a chat message that pointed to
+- **Handler**: `deleteMemory(id)` → `MemoryService.deleteMemory`. A chat message that pointed to
   the memory keeps its text and gets `memory_id = null`.
 
 ### 7. Search memories — `POST /api/v1/ai-agent/memories/search` `[Implemented]`
@@ -113,22 +109,25 @@ There is no memory update endpoint (backlog).
 
 ---
 
-### 8. List chat sessions — `GET /api/v1/ai-agent/sessions` `[Planned]`
+### 8. List chat sessions — `GET /api/v1/ai-agent/sessions` `[Implemented]`
 
-- **Query**: `page?`, `pageSize?` (max 50).
-- **Response `data`**: sessions of the JWT user, newest `lastMessageAt` first: `id`, `title`, `characterId`,
+- **Handler**: `listSessions(req.user.userId, dto.page, dto.pageSize)` → `ChatSessionService.listSessions`
+- **Query** `ListChatDto`: `page?` (min 1, default 1), `pageSize?` (1–50, default 20).
+- **Response `data`**: `{ items, total, page, pageSize }`; sessions of the JWT user, newest `lastMessageAt` first: `id`, `title`, `characterId`,
   `lastMessageAt`, `createdAt`.
 
-### 9. Read the messages of a session — `GET /api/v1/ai-agent/sessions/:id/messages` `[Planned]`
+### 9. Read the messages of a session — `GET /api/v1/ai-agent/sessions/:id/messages` `[Implemented]`
 
-- **Query**: `page?`, `pageSize?` (max 50).
-- **Response `data`**: messages oldest first: `id`, `role` (`USER` / `MODEL`), `content` (full text), `toolCalls`,
+- **Handler**: `listMessages(req.user.userId, id, dto.page, dto.pageSize)` → `ChatSessionService.listMessages`
+- **Query** `ListChatDto`.
+- **Response `data`**: `{ items, total, page, pageSize }`; messages oldest first: `id`, `role` (`USER` / `MODEL`), `content` (full text), `toolCalls`,
   `memoryId` (non-null when the message was marked important), `createdAt`.
 - 404 when the session does not exist or belongs to another user.
 
-### 10. Delete a chat session — `DELETE /api/v1/ai-agent/sessions/:id` `[Planned]`
+### 10. Delete a chat session — `DELETE /api/v1/ai-agent/sessions/:id` `[Implemented]`
 
-- Deletes the session and its messages. Memories made from those messages are kept.
+- **Handler**: `deleteSession(req.user.userId, id)` → `ChatSessionService.deleteSession`
+- Deletes the session and its messages. Memories made from those messages are kept. **Response `data`**: `{ success: true }`.
 - 404 as above.
 
 ---

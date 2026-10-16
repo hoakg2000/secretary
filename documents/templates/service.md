@@ -1,48 +1,43 @@
-# [Service Name] Service
+# [Module] Service
 
-- **General Description**: [Brief description of the business responsibility of this Service]
-- **Accessed Database Tables**:
-  - `table_name_1`
-  - `table_name_2`
+- **Class**: `[Module]Service` — `server/src/[module]/[module].service.ts`
+- **Description**: [One or two sentences: the business responsibility and the main rule it enforces.]
+- **Tables**: `[table_1]`, `[table_2]` (read, write); `[table_3]` (read).
+- **Callers**: `[Module]Controller`, [other services, workers or the AI agent that call it].
 
----
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built. `[De-scoped]` = decided against; never flip it to `[Implemented]` without the owner. Put one after each method heading, or on the class heading when all its methods share it.
 
-## List of Methods
+## Change log
 
-### 1. [Method 1 Name, e.g., getFinanceSummary]
-
-- **Task Description**: [Detailed description of the business logic handled by the method]
-- **Accessed Tables**: `transactions`, `bank_accounts` (Read)
-- **AI Tool Integration**: (Leave empty if not a tool)
-  - **Tool Name**: `get_finance_summary`
-  - **Tool Description**: `Retrieves an overall financial fluctuation report (income, expenses, balance) by time period.`
-  - **Parameters Schema**:
-    - `period` (`string`, required, enum: `['day', 'week', 'month', 'year']`): Reporting period to retrieve.
-    - `month` (`number`, optional): Month to query (1-12).
-    - `year` (`number`, optional): Year to query.
-
-#### Input / Output
-
-- **Input**:
-  - `query`: `FinanceSummaryQueryDto` - [Description of DTO containing query parameters]
-
-- **Output**:
-  - `Promise<FinanceSummaryResponseDto>`: [Overview report of spending/income]
+| Date | Change |
+|------|--------|
+| YYYY-MM-DD | What changed and why. |
+| 2026-10-16 | Rewritten from the module docs (review 2026-10-16): header bullets, `## Methods`, AI tools table with placeholder names (the `get_financial_summary` example with invented parameters is gone), `[De-scoped]` tag. |
 
 ---
 
-### 2. [Method 2 Name, e.g., calculateTax]
+## Methods
 
-- **Task Description**: [Tax calculation - Internal processing, not exposed to AI Agent]
-- **Accessed Tables**: No DB access
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
+(A file with several classes uses one `## [ClassName]` heading per class and keeps the method numbers running.)
 
-#### Input / Output
+### 1. [methodName](args) `[Implemented]`
 
-- **Input**:
-  - `amount` (`number`): [Base amount]
-  - `taxRate` (`number`): [Tax rate]
+- [What it does, in steps or short bullets: checks (with the HTTP error), writes, transaction boundaries.]
+- [Known limit, when there is one: what it is and when to upgrade.]
 
-- **Output**:
-  - `number`: [Calculated tax amount]
+### 2. [otherMethod](args) `[Implemented]`
+
+- [Behavior.] [State "Not an AI tool" only when readers could expect one.]
+
+---
+
+## AI tools
+
+(Omit this section when the module has no `@AiTool()` method.)
+
+| Tool | Method | Confirmation | Parameters |
+|------|--------|--------------|------------|
+| `[tool_name]` | `[methodName](dto)` | no | none, or `[Dto]`: `field`, `field?`. |
+| `[write_tool_name]` | `[methodName](dto)` | **yes** | `[Dto]`: `field`, `field?`. [Fields the model cannot set.] |
+
+[Write tools are parked in `PendingActionStore` and run only after `POST /ai-agent/actions/:actionId/confirm`.]

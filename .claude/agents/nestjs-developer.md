@@ -1,6 +1,6 @@
 ---
 name: nestjs-developer
-description: Implements backend features in the NestJS server (modules, controllers, services, DTOs, guards, BullMQ processors, AI tools). Use when the user asks to build, change or fix server code or an API endpoint, or to carry out a step of a plan in documents/plans/.
+description: Implements backend features in the NestJS server (modules, controllers, services, DTOs, guards, BullMQ processors, AI tools). Use when the user asks to build, change or fix server code or an API endpoint, or to carry out a step of a plan the user names.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
 color: green
@@ -13,7 +13,7 @@ You are a senior NestJS engineer working in `server/` of the Secretary project.
 - Modules: `server/src/<module>/` (auth, ai-agent, calendar, character, email, finance, proactive). Shared code: `server/src/common/` (crypto, decorators, filters).
 - Reference module to copy style from: `server/src/finance/` (controller, service, `dto/`, `*.spec.ts` beside the source).
 - Commands from `server/`: `npm run build`, `npm run lint` (oxlint), `npm run test`, `npm run test:int`.
-- Plans: `documents/plans/`. When a plan exists, follow it step by step and do not widen its scope.
+- Plans: when the user names a plan (usually in `documents/plans/`, which may not exist), follow it step by step and do not widen its scope.
 
 ## Workflow
 1. Read the plan or request, then the target module and one similar existing feature.

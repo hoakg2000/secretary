@@ -1,40 +1,37 @@
-# [Controller Name] Controller
+# [Module] Controller
 
-- **Base Endpoint**: `/api/v1/...`
-- **General Description**: [Brief description of the purpose and functionality of this Controller]
+- **Class**: `[Module]Controller` — `server/src/[module]/[module].controller.ts`
+- **Base endpoint**: `/api/v1/[path]`
+- **Auth**: [for example: every route needs the application JWT (global `JwtAuthGuard`). List the `@Public()` routes.]
+- **Response**: `{ statusCode, message, data }`. [Name the routes that differ: no `data`, SSE, binary.]
+- **Description**: [One or two sentences: what the module manages and how.]
 
----
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built. `[De-scoped]` = decided against; never flip it to `[Implemented]` without the owner. Put one after each endpoint heading.
 
-## List of Endpoints
+## Change log
 
-### 1. [Name/Summary of Endpoint 1 Functionality]
-
-- **Endpoint**: `[POST / GET / PUT / PATCH / DELETE] /api/v1/...`
-- **Guard / Auth**: `[Guard / Middleware / Permissions Name, e.g., AuthGuard('jwt'), RolesGuard('ADMIN')]`
-- **Description**: [Detailed description of the process flow and purpose of this endpoint]
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `[Request DTO Name, e.g., CreateUserDto]`
-  - `field1` (`Type`, required): [Description of field 1]
-  - `field2` (`Type`, optional): [Description of field 2]
-
-- **Response DTO**: `[Response DTO Name, e.g., UserResponseDto]`
-  - `field1` (`Type`): [Description of field 1]
-  - `field2` (`Type`): [Description of field 2]
+| Date | Change |
+|------|--------|
+| YYYY-MM-DD | What changed and why. |
+| 2026-10-16 | Rewritten from the module docs (review 2026-10-16): header bullets, `## Endpoints`, heading format, `Handler` / `Request` / `Response data` bullets, `[De-scoped]` tag. |
 
 ---
 
-### 2. [Name/Summary of Endpoint 2 Functionality]
+## Endpoints
 
-- **Endpoint**: `[POST / GET / PUT / PATCH / DELETE] /api/v1/...`
-- **Guard / Auth**: `[Guard / Middleware / Permissions Name]`
-- **Description**: [Detailed description of the process flow and purpose of this endpoint]
+(Group the endpoints under `## [Group name]` headings when the module has several resources. Number endpoints across the whole file.)
 
-#### Data Transfer Objects (DTO)
+### 1. [Title] — `[METHOD] /api/v1/[path]` `[Implemented]`
 
-- **Request DTO**: `[Request DTO / Params / Query Name]`
-  - `id` (`string`, path param): [Description of param]
+- **Handler**: `[methodName](args)`. [Status code when it is not 200, for example "Returns 201."]
+- **Request** `[RequestDto]`: `field` ([type], required), `field?` ([type], optional, default [value]). [Query and path params the same way.]
+- **Response `data`**: `{ field, field }` or [short description].
+- Errors: [404 when ..., 400 when ..., 409 when ...].
 
-- **Response DTO**: `[Response DTO Name]`
-  - `success` (`boolean`): [Processing status]
+### 2. [Title] — `[METHOD] /api/v1/[path]/:id` `[Implemented]`
+
+- **Handler**: `[methodName](id)`. [Behavior in one or two sentences.]
+
+## Not built `[Planned]`
+
+- [Item that is designed but not in the code. Use a second section headed "Not built" with the `[De-scoped]` tag for what was decided against.]

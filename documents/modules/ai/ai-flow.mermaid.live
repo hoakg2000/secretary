@@ -1,10 +1,12 @@
-%% AI agent module flow, drawn from server/src/ai-agent (2026-10-13).
+%% AI agent module flow, drawn from server/src/ai-agent (checked 2026-10-16).
 %% Change log
-%% 2026-10-13: Redrawn from the code. Removed the Email/Finance -> RagChunkService sync (never called, D7),
+%% 2026-10-13: Redrawn from the code. Removed the Email/Finance -> RagChunkService sync (never called),
 %%             the text-embedding-004 model name, and the client-side layers. Added the confirmation branch
 %%             and the pre-turn memory retrieval.
-%% 2026-10-13: Added chat storage (D19, D20), Planned, task 6.4: dashed edges. Chat sessions and messages go to
+%% 2026-10-13: Added chat storage, drawn as Planned with dashed edges. Chat sessions and messages go to
 %%             relational tables; only a message the AI marks important reaches ai_memories.
+%% 2026-10-16: Chat storage verified in the code: edges are solid, "Planned" labels removed. Decision IDs removed.
+%% 2026-10-16: Review fixes: added the `session` and `error` frames, removed a duplicate `MemTools --> MemSvc` edge, removed `;` from two edge labels.
 flowchart TB
     Client["Client"]
 
@@ -16,7 +18,7 @@ flowchart TB
     subgraph Module ["AiAgentModule"]
         Controller["AiAgentController: /api/v1/ai-agent"]
         Agent["AgentService: chat turn, tool loop, max 5 rounds"]
-        ChatSvc["ChatSessionService - Planned"]
+        ChatSvc["ChatSessionService"]
         Pending["PendingActionStore: in memory, 5 minutes"]
         MemSvc["MemoryService: hybrid search, decay at query time"]
         MemTools["MemoryTools: search_semantic_memory, save_user_memory"]
@@ -27,20 +29,20 @@ flowchart TB
 
     subgraph Database ["PostgreSQL"]
         DbChar[("characters, personas")]
-        DbSession[("chat_sessions - Planned")]
-        DbMessage[("chat_messages: full text, no vector - Planned")]
+        DbSession[("chat_sessions")]
+        DbMessage[("chat_messages: full text, no vector")]
         DbMemory[("ai_memories: vector 1536 + tsvector")]
     end
 
     %% Chat turn
     Client -- "1. POST /chat/stream" --> Controller
     Controller -- "2. chatStream" --> Agent
-    Agent -. "3. Planned: create or load session, check owner" .-> ChatSvc
-    ChatSvc -.-> DbSession
-    Agent -. "4. Planned: store the user message in full" .-> ChatSvc
-    ChatSvc -. "insert role USER" .-> DbMessage
-    Agent -. "5. Planned: last 20 messages as history" .-> ChatSvc
-    Agent -- "6. Persona; Planned: memory_rule" --> DbChar
+    Agent -- "3. create or load session, check owner" --> ChatSvc
+    ChatSvc --> DbSession
+    Agent -- "4. store the user message in full" --> ChatSvc
+    ChatSvc -- "insert role USER" --> DbMessage
+    Agent -- "5. last 20 messages as history" --> ChatSvc
+    Agent -- "6. Persona, memory_rule" --> DbChar
     Agent -- "7. Pre-turn retrieval, up to 5 memories" --> MemSvc
     MemSvc -- "vector + text search" --> DbMemory
     Agent -- "8. Prompt, history, tool declarations" --> Gemini
@@ -50,18 +52,17 @@ flowchart TB
     Agent -- "10a. Read tool: run, return result" --> OtherTools
     Agent -- "10b. Write tool: park, emit confirmation_required" --> Pending
     Agent -- "10c. Memory tools" --> MemTools
-    MemTools --> MemSvc
 
     %% Important message -> memory
     MemTools -- "save_user_memory: the AI marks the message important" --> MemSvc
     MemSvc -- "embed" --> Gemini
     MemSvc -- "insert, source CHAT" --> DbMemory
-    Agent -. "11. Planned: set memory_id on the user message" .-> ChatSvc
+    Agent -- "11. set memory_id on the user message" --> ChatSvc
 
     %% End of turn
-    Agent -. "12. Planned: at done, store the model answer in full" .-> ChatSvc
-    ChatSvc -. "insert role MODEL" .-> DbMessage
-    Agent -- "13. SSE frames: text, tool_call, tool_result, confirmation_required, done" --> Controller
+    Agent -- "12. at normal end, store the model answer in full" --> ChatSvc
+    ChatSvc -- "insert role MODEL" --> DbMessage
+    Agent -- "13. SSE frames: session, text, tool_call, tool_result, confirmation_required, error, done" --> Controller
     Controller --> Client
 
     %% Confirmation
@@ -70,11 +71,11 @@ flowchart TB
     Agent -- "take once" --> Pending
 
     %% Session routes
-    Client -. "Planned: GET /sessions, GET /sessions/:id/messages, DELETE /sessions/:id" .-> Controller
-    Controller -.-> ChatSvc
+    Client -- "GET /sessions, GET /sessions/:id/messages, DELETE /sessions/:id" --> Controller
+    Controller --> ChatSvc
 
     %% Memory routes
-    Client -- "POST, GET, DELETE /memories; POST /memories/search" --> Controller
+    Client -- "POST, GET, DELETE /memories, POST /memories/search" --> Controller
     Controller --> MemSvc
 
     %% TTS

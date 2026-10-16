@@ -1,12 +1,12 @@
 # Secretary — API routes
 
-Taken from the controllers in `server/src` (2026-10-13). **Swagger at `/api/docs` is the reference** for request
+Taken from the controllers in `server/src` (last checked 2026-10-16). **Swagger at `/api/docs` is the reference** for request
 and response shapes; this file lists what exists and who may call it.
 
-- Base path: `/api/v1` (global prefix). `GET /` is outside it.
+- Base path: `/api/v1` (global prefix). `GET /` and `/api/docs` are outside it.
 - Auth: every route needs `Authorization: Bearer <access token>` unless marked **Public**
   (`JwtAuthGuard` is global; public routes carry `@Public()`).
-- Responses are `{ statusCode, message, data }`.
+- Success responses are `{ statusCode, message, data }` (logout has no `data`; the chat stream is SSE and TTS is MP3). Errors use Nest's default `{ statusCode, message, error }`.
 - Constraint errors: duplicate → 409, missing row → 404, bad reference → 400.
 - A route or field marked **Planned** is designed but not in the code.
 
@@ -14,9 +14,12 @@ and response shapes; this file lists what exists and who may call it.
 
 | Date | Change |
 |------|--------|
-| 2026-10-13 | Proactive: `POST /proactive/trigger` delivers through Telegram; statuses `SENT` / `FAILED` / `NOT_CONFIGURED` (task 6.1). |
-| 2026-10-13 | Email: new public route `POST /email/pubsub` with Google ID token check (task 6.2); every queued email is classified by the AI (task 6.3). |
-| 2026-10-13 | AI agent, **Planned** (D19, D20, task 6.4): chat sessions and full messages stored server-side. `POST /ai-agent/chat/stream` gains `sessionId` and the `session` frame and loses `history`; new routes `GET /ai-agent/sessions`, `GET /ai-agent/sessions/:id/messages`, `DELETE /ai-agent/sessions/:id`. See "Chat storage" under AI agent. |
+| 2026-10-13 | Proactive: `POST /proactive/trigger` delivers through Telegram; statuses `SENT` / `FAILED` / `NOT_CONFIGURED`. |
+| 2026-10-13 | Email: new public route `POST /email/pubsub` with Google ID token check; every queued email is classified by the AI. |
+| 2026-10-13 | AI agent: chat sessions and full messages stored server-side. `POST /ai-agent/chat/stream` gains `sessionId` and the `session` frame and loses `history`; new routes `GET /ai-agent/sessions`, `GET /ai-agent/sessions/:id/messages`, `DELETE /ai-agent/sessions/:id`. |
+| 2026-10-16 | Chat storage verified against the controller and DTOs: marked implemented, "stores no chat" text and `history` removed. Dead references to deleted planning files removed. `/api/docs` noted as outside the prefix. |
+| 2026-10-16 | Review fixes: pull sync is `[De-scoped]`; duplicate `PENDING` email is queued again; response envelope exceptions stated. |
+| 2026-10-16 | Review fix: `POST /proactive/trigger` lists the `type` values; module docs added under `modules/proactive/`. |
 
 ## Auth — `/auth`
 
@@ -33,7 +36,7 @@ and response shapes; this file lists what exists and who may call it.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/characters` | JWT | Create. `isActive: true` deactivates the others. |
+| POST | `/characters` | JWT | Create. `isActive: true` deactivates the others. `memoryRule?` (max 2000 characters) tells the AI which chat messages to remember. |
 | GET | `/characters` | JWT | List with personas. |
 | GET | `/characters/:id` | JWT | One character with personas. |
 | PATCH | `/characters/:id` | JWT | Update. |
@@ -47,7 +50,7 @@ and response shapes; this file lists what exists and who may call it.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/email/ingest` | JWT | Manual ingest of one parsed email `{ messageId, sender, subject?, rawBody? }`. Duplicate `messageId` → 200 with `data: null`. Blacklisted → saved `SKIPPED`, not queued. |
+| POST | `/email/ingest` | JWT | Manual ingest of one parsed email `{ messageId, sender, subject?, rawBody? }`. Duplicate `messageId` already past `PENDING` → 200 with `data: null`; a duplicate still `PENDING` is queued again. Blacklisted → saved `SKIPPED`, not queued. |
 | POST | `/email/pubsub` | Public + Google ID token | Gmail Pub/Sub push receiver. `Authorization: Bearer <ID token>` must be signed by Google for `PUBSUB_PUSH_AUDIENCE` and belong to `PUBSUB_PUSH_SERVICE_ACCOUNT`, else 401. Body `{ message: { data, messageId, publishTime? }, subscription? }`. Fetches new INBOX messages since the stored Gmail history ID and ingests each one; returns `data.fetched`. 503 when the three Pub/Sub variables are missing or a pass is already running; any non-2xx makes Pub/Sub redeliver, which is safe (duplicates are ignored). |
 | POST | `/email-rules` | JWT | Create a rule (`type`, `matcher`, `matchValue`, `description?`, `isActive?`). Invalid regex → 400. |
 | GET | `/email-rules` | JWT | List rules. |
@@ -97,13 +100,16 @@ Local is the source of truth; changes are pushed one way to Google.
 | DELETE | `/calendar/:id` | JWT | Delete. A synced event is hidden at once and removed after the next sync deletes it on Google. |
 | POST | `/calendar/sync` | JWT | Push now. Returns `{ pushed, deleted, removedRemotely, failed }`, or `data: null` when Google is not connected or a run is in progress. |
 
-Planned: pull sync from Google, conflict handling.
+De-scoped: pull sync from Google, conflict handling.
 
 ## AI agent — `/ai-agent`
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/ai-agent/chat/stream` | JWT | SSE over POST. Body `{ message, characterId?, history?: [{ role: 'user' \| 'model', text }] }` (max 20 turns). |
+| POST | `/ai-agent/chat/stream` | JWT | SSE over POST. Body `{ message, sessionId?, characterId? }`. No `sessionId` → a session is created. A `sessionId` that is unknown or belongs to another user → 404 before the stream opens, no model call. The user's message is stored before the model is called; the model's answer is stored when the turn ends normally. A turn ending in `error`, or aborted by the client, stores the user's message only. |
+| GET | `/ai-agent/sessions?page=&pageSize=` | JWT | Own sessions, newest `lastMessageAt` first (`pageSize` max 50). |
+| GET | `/ai-agent/sessions/:id/messages?page=&pageSize=` | JWT | Messages of an own session, oldest first: `id`, `role` (`USER` / `MODEL`), `content`, `toolCalls`, `memoryId`, `createdAt`. 404 for an unknown or foreign session. |
+| DELETE | `/ai-agent/sessions/:id` | JWT | Delete an own session and its messages. Memories made from them are kept. |
 | POST | `/ai-agent/actions/:actionId/confirm` | JWT | Run a write action the AI proposed. 404 if unknown, used or older than 5 minutes. |
 | DELETE | `/ai-agent/actions/:actionId` | JWT | Discard a proposed action. |
 | POST | `/ai-agent/memories` | JWT | Save a memory. |
@@ -112,28 +118,21 @@ Planned: pull sync from Google, conflict handling.
 | POST | `/ai-agent/memories/search` | JWT | Hybrid search `{ query, category?, source?, limit? (1–20), minScore? (0–1, default 0.5) }`. |
 | POST | `/ai-agent/tts` | JWT | MP3 stream. 503 without `FISH_AUDIO_API_KEY`, 400 when no voice resolves. |
 
-Today the server stores no chat: the client keeps the conversation and sends the recent turns in `history`.
-
-### Chat storage — Planned (D19, D20, `next-steps.md` section 6.4)
+### Chat storage
 
 The server stores every chat session and the full text of every message, both the one sent by the user and the
-one received from the model, in `chat_sessions` / `chat_messages` (`db.md` section 5). Chat is never stored in the
-vector store. Only a message the AI marks important, by the rule configured on the character, is also saved to
-`ai_memories`.
+one received from the model, in `chat_sessions` / `chat_messages` (`db.md` section 5). The server, not the
+client, supplies the history of a turn (the last 20 earlier messages of the session). Chat is never stored in the
+vector store. Only a message the AI marks important, by the rule in `characters.memory_rule` (built-in default
+when null), is also saved to `ai_memories` and linked through `chat_messages.memory_id`.
 
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/ai-agent/chat/stream` | JWT | Body becomes `{ message, sessionId?, characterId? }`; `history` is removed. No `sessionId` → a session is created. A `sessionId` of another user → 404, no model call. The user's message is stored before the model is called; the model's answer is stored at `done`. A turn ending in `error` stores the user's message only. |
-| GET | `/ai-agent/sessions?page=&pageSize=` | JWT | Own sessions, newest `lastMessageAt` first (`pageSize` max 50). |
-| GET | `/ai-agent/sessions/:id/messages?page=&pageSize=` | JWT | Messages of an own session, oldest first: `id`, `role` (`USER` / `MODEL`), `content`, `toolCalls`, `memoryId`, `createdAt`. |
-| DELETE | `/ai-agent/sessions/:id` | JWT | Delete an own session and its messages. Memories made from them are kept. |
+The first frame of every chat stream is `{ "type": "session", "sessionId": "…" }`.
 
-New first frame of every chat stream: `{ "type": "session", "sessionId": "…" }`.
-
-Chat stream frames today (`data:` lines, JSON):
+Chat stream frames (`data:` lines, JSON):
 
 | `type` | Fields | Meaning |
 |--------|--------|---------|
+| `session` | `sessionId` | First frame of every stream. |
 | `text` | `content` | A chunk of the answer. |
 | `tool_call` | `tool`, `args` | A read tool is running. |
 | `tool_result` | `tool`, `result` | Its result. |
@@ -156,7 +155,7 @@ AI tools (confirmation = not executed inside the chat):
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/proactive/trigger` | JWT | `{ type, message, channel?, metadata? }`. Sends `message` as Telegram text (`channel` is `TELEGRAM` only). `data.result.status` is `SENT`, `FAILED` or `NOT_CONFIGURED` (bot token or chat ID missing); `data.success` is `true` only for `SENT`. |
+| POST | `/proactive/trigger` | JWT | `{ type, message, channel?, metadata? }`; `type` is `URGENT_EVENT`, `INACTIVITY_FALLBACK`, `SCHEDULED_REMINDER` or `CUSTOM`. Sends `message` as Telegram text (`channel` is `TELEGRAM` only). `data.result.status` is `SENT`, `FAILED` or `NOT_CONFIGURED` (bot token or chat ID missing); `data.success` is `true` only for `SENT`. |
 
 ## Other
 

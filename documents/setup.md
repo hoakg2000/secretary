@@ -2,6 +2,12 @@
 
 All commands run from `server/`. Needs Node 24 and Docker.
 
+## Change log
+
+| Date | Change |
+|------|--------|
+| 2026-10-16 | Removed a link to a deleted planning file; the untested Gmail push step is stated inline. |
+
 ## First run
 
 1. Start Postgres (pgvector) and Redis:
@@ -57,7 +63,7 @@ Needs a connected Google account (above) and a public HTTPS URL for this server:
 5. The server calls Gmail `users.watch` at startup and once a day (a watch expires after 7 days). If Google was
    connected after startup, restart once so the watch is registered.
 
-Not yet run against the real services (`next-steps.md` section 1.4).
+Not yet run against the real Gmail and Pub/Sub services: the watch call and the push ID token check are untested outside the fakes.
 
 ## Upgrading a database created before 2026-10-13
 

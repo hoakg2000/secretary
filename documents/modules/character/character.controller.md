@@ -1,203 +1,69 @@
-# Character & Persona Controller
+# Character Controller
 
-- **Base Endpoint**: `/api/v1/characters`
-- **General Description**: Controller handling the management of AI characters and their associated persona attribute configurations (prompts, tones, identity, knowledge background, relationship dynamics, etc.).
+- **Class**: `CharacterController` — `server/src/character/character.controller.ts`
+- **Base endpoint**: `/api/v1/characters`
+- **Auth**: every route needs the application JWT (global `JwtAuthGuard`).
+- **Response**: `{ statusCode, message, data }`.
+- **Description**: CRUD for AI characters and their personas (prompt parts), and selection of the single active
+  character. Personas are returned with the character; there is no separate persona list route.
 
----
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
 
-## List of Endpoints
+## Change log
 
-### 1. Get All Characters
-
-- **Endpoint**: `GET /api/v1/characters`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Retrieves a list of all registered AI characters in the system.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `None`
-
-- **Response DTO**: `CharacterResponseDto[]`
-  - `id` (`string`): Character UUID.
-  - `name` (`string`): Character name.
-  - `voiceId` (`string`): Fish.audio voice ID assigned to the character.
-  - `source` (`string`): Character origin source.
-  - `isActive` (`boolean`): Active status flag.
-  - `createdAt` (`string`): ISO timestamp of creation.
-  - `updatedAt` (`string`): ISO timestamp of last update.
+| Date | Change |
+|------|--------|
+| 2026-10-16 | Rewritten from the code. Update routes are `PATCH` (were `PUT`). Removed `GET /characters/:id/personas` (personas come with the character). Added `PATCH /characters/:id/active`. Added `memoryRule` to the create / update body. Persona routes check that the persona belongs to the character in the URL. |
 
 ---
 
-### 2. Create Character
+## Endpoints
 
-- **Endpoint**: `POST /api/v1/characters`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Creates a new AI character entry with a specified name, voice ID, and source.
+### 1. Create a character — `POST /api/v1/characters` `[Implemented]`
 
-#### Data Transfer Objects (DTO)
+- **Handler**: `createCharacter(dto)` → `CharacterService.createCharacter`. Returns 201.
+- **Request** `CreateCharacterDto`: `name` (required), `voiceId?` (Fish.audio voice), `source?`, `memoryRule?`
+  (max 2000 characters; tells the AI which chat messages to remember, null = built-in default), `isActive?`
+  (default false).
+- `isActive: true` deactivates every other character in the same transaction.
+- **Response `data`**: the character with `personas`.
 
-- **Request DTO**: `CreateCharacterDto`
-  - `name` (`string`, required): Character name.
-  - `voiceId` (`string`, required): Fish.audio voice ID.
-  - `source` (`string`, required): Origin source (e.g., Anime, Game, Original).
-  - `isActive` (`boolean`, optional): Whether to immediately activate the character. Default is false.
+### 2. List characters — `GET /api/v1/characters` `[Implemented]`
 
-- **Response DTO**: `CharacterResponseDto`
-  - `id` (`string`): Character UUID.
-  - `name` (`string`): Character name.
-  - `voiceId` (`string`): Voice ID.
-  - `source` (`string`): Character origin.
-  - `isActive` (`boolean`): Active status.
-  - `createdAt` (`string`): ISO timestamp of creation.
-  - `updatedAt` (`string`): ISO timestamp of last update.
+- **Handler**: `findAllCharacters()`. Newest first, each with `personas`. No pagination.
 
----
+### 3. Get one character — `GET /api/v1/characters/:id` `[Implemented]`
 
-### 3. Update Character
+- **Handler**: `findCharacterById(id)`. With `personas`. 404 when missing.
 
-- **Endpoint**: `PUT /api/v1/characters/:id`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Updates information for an existing AI character, including name, voice ID, source, or active status.
+### 4. Update a character — `PATCH /api/v1/characters/:id` `[Implemented]`
 
-#### Data Transfer Objects (DTO)
+- **Handler**: `updateCharacter(id, dto)`.
+- **Request** `UpdateCharacterDto`: every field of `CreateCharacterDto`, all optional.
+- `isActive: true` deactivates the others. 404 when missing. Setting `isActive: false` is allowed and leaves no
+  active character.
 
-- **Request DTO**: `UpdateCharacterDto`
-  - `id` (`string`, path param, required): Character UUID.
-  - `name` (`string`, optional): Updated character name.
-  - `voiceId` (`string`, optional): Updated voice ID.
-  - `source` (`string`, optional): Updated source.
-  - `isActive` (`boolean`, optional): Updated active status.
+### 5. Delete a character — `DELETE /api/v1/characters/:id` `[Implemented]`
 
-- **Response DTO**: `CharacterResponseDto`
-  - `id` (`string`): Character UUID.
-  - `name` (`string`): Character name.
-  - `voiceId` (`string`): Voice ID.
-  - `source` (`string`): Character origin.
-  - `isActive` (`boolean`): Active status.
-  - `createdAt` (`string`): ISO timestamp.
-  - `updatedAt` (`string`): ISO timestamp.
+- **Handler**: `removeCharacter(id)`. Personas are deleted with it (cascade). `chat_sessions.character_id` is set to
+  null. 404 when missing. **Response `data`**: the deleted row.
 
----
+### 6. Make a character active — `PATCH /api/v1/characters/:id/active` `[Implemented]`
 
-### 4. Activate Character
+- **Handler**: `setActiveCharacter(id)`. Deactivates the others and activates this one in one transaction.
+  404 when missing.
 
-- **Endpoint**: `PATCH /api/v1/characters/:id/activate`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Activates a specific AI character as the primary active character and automatically deactivates all other characters (setting `isActive = false`).
+### 7. Add a persona — `POST /api/v1/characters/:id/personas` `[Implemented]`
 
-#### Data Transfer Objects (DTO)
+- **Handler**: `addPersona(id, dto)`. Returns 201. 404 when the character is missing.
+- **Request** `CreatePersonaDto`: `type` (`PersonaType`: `SYSTEM_PROMPT`, `TONE`, `IDENTITY`,
+  `KNOWLEDGE_BACKGROUND`, `RELATIONSHIP_DYNAMICS`, `OTHER`), `value` (text). Both required.
 
-- **Request DTO**: `ActivateCharacterParamsDto`
-  - `id` (`string`, path param, required): Character UUID to activate.
+### 8. Update a persona — `PATCH /api/v1/characters/:id/personas/:personaId` `[Implemented]`
 
-- **Response DTO**: `CharacterResponseDto`
-  - `id` (`string`): Character UUID.
-  - `name` (`string`): Character name.
-  - `voiceId` (`string`): Voice ID.
-  - `source` (`string`): Character origin.
-  - `isActive` (`boolean`): Active status (`true`).
-  - `createdAt` (`string`): ISO timestamp.
-  - `updatedAt` (`string`): ISO timestamp.
+- **Handler**: `updatePersona(id, personaId, dto)`. **Request** `UpdatePersonaDto`: `type?`, `value?`.
+- 404 when the persona does not exist or belongs to another character.
 
----
+### 9. Delete a persona — `DELETE /api/v1/characters/:id/personas/:personaId` `[Implemented]`
 
-### 5. Delete Character
-
-- **Endpoint**: `DELETE /api/v1/characters/:id`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Permanently deletes an AI character and cascades deletion to all associated persona records.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `DeleteCharacterParamsDto`
-  - `id` (`string`, path param, required): Character UUID.
-
-- **Response DTO**: `DeleteCharacterResponseDto`
-  - `success` (`boolean`): Operation success status.
-  - `message` (`string`): Result confirmation message.
-
----
-
-### 6. Get Personas for Character
-
-- **Endpoint**: `GET /api/v1/characters/:id/personas`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Retrieves all configured persona attributes (prompt, tone, identity, etc.) for a specific AI character.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `GetPersonasParamsDto`
-  - `id` (`string`, path param, required): Character UUID.
-
-- **Response DTO**: `PersonaResponseDto[]`
-  - `id` (`string`): Persona UUID.
-  - `characterId` (`string`): Parent character UUID.
-  - `type` (`string`): Persona attribute type (`SYSTEM_PROMPT`, `TONE`, `IDENTITY`, `KNOWLEDGE_BACKGROUND`, `RELATIONSHIP_DYNAMICS`, `OTHER`).
-  - `value` (`string`): Detailed prompt content or context value.
-  - `createdAt` (`string`): ISO timestamp.
-  - `updatedAt` (`string`): ISO timestamp.
-
----
-
-### 7. Add Persona to Character
-
-- **Endpoint**: `POST /api/v1/characters/:id/personas`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Adds a new persona attribute configuration (`type` and `value`) to a target AI character.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `CreatePersonaDto`
-  - `id` (`string`, path param, required): Target character UUID.
-  - `type` (`string`, required, enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`): Persona attribute category.
-  - `value` (`string`, required): Prompt context content.
-
-- **Response DTO**: `PersonaResponseDto`
-  - `id` (`string`): Created persona UUID.
-  - `characterId` (`string`): Associated character UUID.
-  - `type` (`string`, enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`): Persona attribute category.
-  - `value` (`string`): Persona content value.
-  - `createdAt` (`string`): ISO timestamp.
-  - `updatedAt` (`string`): ISO timestamp.
-
----
-
-### 8. Update Persona
-
-- **Endpoint**: `PUT /api/v1/characters/:id/personas/:personaId`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Updates a specific persona attribute configuration for a character.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `UpdatePersonaDto`
-  - `id` (`string`, path param, required): Character UUID.
-  - `personaId` (`string`, path param, required): Persona UUID.
-  - `type` (`string`, optional, enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`): Updated persona attribute category.
-  - `value` (`string`, optional): Updated prompt context content.
-
-- **Response DTO**: `PersonaResponseDto`
-  - `id` (`string`): Persona UUID.
-  - `characterId` (`string`): Associated character UUID.
-  - `type` (`string`, enum: `['SYSTEM_PROMPT', 'TONE', 'IDENTITY', 'KNOWLEDGE_BACKGROUND', 'RELATIONSHIP_DYNAMICS', 'OTHER']`): Persona attribute category.
-  - `value` (`string`): Persona content value.
-  - `createdAt` (`string`): ISO timestamp.
-  - `updatedAt` (`string`): ISO timestamp.
-
----
-
-### 9. Delete Persona
-
-- **Endpoint**: `DELETE /api/v1/characters/:id/personas/:personaId`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Deletes a specific persona attribute configuration from a character.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `DeletePersonaParamsDto`
-  - `id` (`string`, path param, required): Character UUID.
-  - `personaId` (`string`, path param, required): Persona UUID.
-
-- **Response DTO**: `DeletePersonaResponseDto`
-  - `success` (`boolean`): Operation success status.
-  - `message` (`string`): Result confirmation message.
+- **Handler**: `removePersona(id, personaId)`. 404 as above.

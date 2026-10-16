@@ -1,134 +1,93 @@
-# Calendar Proxy Service
+# Calendar Services
 
-- **General Description**: Service responsible for local calendar event CRUD operations, sync state management, bi-directional reconciliation with Google Calendar API, and exposed AI Tool functionality for calendar queries.
-- **Accessed Database Tables**:
-  - `local_calendars`
-  - `calendar_sync_states`
+- **Module**: `CalendarModule` — `server/src/calendar/calendar.module.ts`
+- **Description**: local calendar CRUD, four AI tools, and a one-way push of changes to Google Calendar.
 
----
+| Class | File (under `server/src/calendar/`) | Role | Status |
+|-------|-------------------------------------|------|--------|
+| `CalendarService` | `calendar.service.ts` | CRUD on `local_calendars`, marks sync state `DIRTY`. | `[Implemented]` |
+| `CalendarTools` | `calendar.tools.ts` | The four calendar AI tools. | `[Implemented]` |
+| `CalendarSyncService` | `calendar-sync.service.ts` | Cron and manual push to Google. | `[Implemented]` |
 
-## List of Methods
+**Tables**: `local_calendars`, `calendar_sync_states`, `users` (Google tokens, through `GoogleClientFactory`).
 
-### 1. getEvents
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
 
-- **Task Description**: Retrieves local calendar events from `local_calendars` along with their corresponding `calendar_sync_states` records. Exposed as an AI Tool for retrieving events.
-- **Accessed Tables**: `local_calendars`, `calendar_sync_states` (Read)
-- **AI Tool Integration**:
-  - **Tool Name**: `get_calendar_events`
-  - **Tool Description**: `Retrieves local DB calendar events within an optional time window.`
-  - **Parameters Schema**:
-    - `startDate` (`string`, optional): ISO 8601 start date timestamp.
-    - `endDate` (`string`, optional): ISO 8601 end date timestamp.
+## Change log
 
-#### Input / Output
-
-- **Input**:
-  - `query`: `GetCalendarEventsQueryDto` - Query containing optional startDate and endDate parameters.
-
-- **Output**:
-  - `Promise<CalendarEventResponseDto[]>`: Array of local calendar events with sync state details.
+| Date | Change |
+|------|--------|
+| 2026-10-16 | Rewritten from the code. Sync is one-way (local to Google), not bi-directional. Added soft delete (`deleted_at`), `reminded_at` reset, `CalendarTools` and its confirmation flags, the client-generated Google event ID, and the `markSynced` race rule. Pull sync is `[De-scoped]`. |
+| 2026-10-16 | Review fixes: pull sync is `[De-scoped]`; method headings tagged `[Implemented]`. |
 
 ---
 
-### 2. createEvent
+## CalendarService
 
-- **Task Description**: Inserts a new calendar event into `local_calendars`, creates an initial sync state record in `calendar_sync_states`, and initiates an asynchronous or direct sync call to Google Calendar API. Exposed as an AI Tool for creating schedule events.
-- **Accessed Tables**: `local_calendars` (Write), `calendar_sync_states` (Write)
-- **AI Tool Integration**:
-  - **Tool Name**: `create_calendar_event`
-  - **Tool Description**: `Creates a new calendar event in local calendar and syncs to Google Calendar.`
-  - **Parameters Schema**:
-    - `title` (`string`, required): Event title.
-    - `startTime` (`string`, required): Start time in ISO format.
-    - `endTime` (`string`, required): End time in ISO format.
-    - `description` (`string`, optional): Details or description.
-    - `location` (`string`, optional): Event location.
+Not an AI tool in any method (the tools call it).
 
-#### Input / Output
+### 1. createEvent(dto) `[Implemented]`
 
-- **Input**:
-  - `dto`: `CreateCalendarEventDto` - Data required to create local event and populate sync fields.
+- Requires `endTime > startTime` (`BadRequestException`). Creates the event and its `calendar_sync_states` row with
+  `sync_status = DIRTY` in one write. Also called by `EmailProcessor` for emails the model classifies as `EVENT`.
 
-- **Output**:
-  - `Promise<CalendarEventResponseDto>`: Created local calendar event along with Google Calendar sync response.
+### 2. getEvents(query) `[Implemented]`
 
----
+- Events with `deleted_at` null that overlap `[fromDate, toDate]` (either bound optional), ordered by `start_time`.
 
-### 3. updateEvent
+### 3. getEventById(id) `[Implemented]`
 
-- **Task Description**: Modifies an existing calendar event in `local_calendars` and transitions its `calendar_sync_states.sync_status` to `DIRTY`. Attempts an immediate sync with Google Calendar API using ETag condition:
-  - On successful Google Calendar API update: Stores new ETag and updates `sync_status` to `SYNCED`.
-  - On ETag mismatch / concurrent modification: Sets `sync_status` to `CONFLICT` for manual/orchestrated resolution.
-- **Accessed Tables**: `local_calendars` (Read, Write), `calendar_sync_states` (Read, Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
+- `findFirst` with `deleted_at` null, with `syncState`. `NotFoundException` otherwise.
 
-#### Input / Output
+### 4. updateEvent(id, dto) `[Implemented]`
 
-- **Input**:
-  - `id` (`string`): Local calendar event UUID.
-  - `dto`: `UpdateCalendarEventDto` - Partial update properties for event.
+- Re-checks the range using stored values for fields not sent. Updates the row, upserts the sync state to `DIRTY`, and sets
+  `reminded_at = null` when `startTime` changes.
 
-- **Output**:
-  - `Promise<CalendarEventResponseDto>`: Updated calendar event entity representation.
+### 5. deleteEvent(id) `[Implemented]`
+
+- Has a `google_event_id` → soft delete (`deleted_at = now`) and sync state `DIRTY`. Otherwise delete the row. Returns
+  `{ success: true }`.
 
 ---
 
-### 4. deleteEvent
+## CalendarTools (AI tools)
 
-- **Task Description**: Removes a calendar event from `local_calendars`, deletes or cancels the associated remote event via Google Calendar API, and removes or marks the `calendar_sync_states` record.
-- **Accessed Tables**: `local_calendars` (Read, Delete), `calendar_sync_states` (Read, Delete)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
+| Tool | Confirmation | DTO | Does |
+|------|--------------|-----|------|
+| `get_calendar_events` | no | `QueryCalendarDto` | `CalendarService.getEvents` |
+| `create_calendar_event` | no | `CreateEventDto` | `CalendarService.createEvent` |
+| `update_calendar_event` | **yes** | `AiUpdateEventDto` (`id` + `UpdateEventDto`) | `CalendarService.updateEvent` |
+| `delete_calendar_event` | **yes** | `AiDeleteEventDto` (`id`) | `CalendarService.deleteEvent` |
 
-#### Input / Output
-
-- **Input**:
-  - `id` (`string`): Local calendar event UUID to delete.
-
-- **Output**:
-  - `Promise<DeleteCalendarEventResponseDto>`: Deletion success confirmation status.
+Tools with confirmation are parked in `PendingActionStore` until `POST /ai-agent/actions/:actionId/confirm`.
 
 ---
 
-### 5. syncGoogleCalendar
+## CalendarSyncService
 
-- **Task Description**: Executes bi-directional synchronization between `local_calendars` and Google Calendar API:
-  - Identifies events with `DIRTY` status in `calendar_sync_states` and pushes updates to Google Calendar API with ETag matching (`If-Match`).
-  - Identifies events updated or added on Google Calendar since `lastSyncedAt`:
-    - If local record is unmodified (`SYNCED`): Pulls remote updates into `local_calendars` and updates ETag.
-    - If local record has unpushed modifications (`DIRTY`): Flags `sync_status` as `CONFLICT`.
-  - Updates `last_synced_at` timestamp and sync metrics.
-- **Accessed Tables**: `local_calendars` (Read, Write), `calendar_sync_states` (Read, Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
+One-way push, local to Google (`calendarId: primary`). Local is the source of truth.
 
-#### Input / Output
+### 6. Schedule `[Implemented]`
 
-- **Input**: None
+- On bootstrap a cron job named `calendar-sync` is registered from `CALENDAR_SYNC_CRON` (default every 5 minutes).
+  `handleCalendarCronSync` calls `syncLocalToGoogle` and logs, never throws.
 
-- **Output**:
-  - `Promise<CalendarSyncResponseDto>`: Sync metrics including count of synchronized events, conflicts detected, and completion timestamp.
+### 7. syncLocalToGoogle() `[Implemented]`
 
----
+- Returns `null` when a run is in progress or no user has Google tokens. Otherwise processes every `DIRTY` sync state
+  and returns `{ pushed, deleted, removedRemotely, failed }`. One failing event increments `failed` and does not stop the rest.
+- Soft-deleted event: delete on Google (404 / 410 ignored), then delete the local row → `deleted`.
+- No `google_event_id`: `events.insert` with a client-generated ID (the local UUID without dashes), so a retry does not
+  create a second event; a 409 is treated as "already created" and continues as an update → `pushed`.
+- Has a `google_event_id`: `events.patch` with only the fields local owns (`summary`, `description`, `location`, `start`,
+  `end`) → `pushed`. A 404 / 410 means the event was deleted on Google: the Google ID is cleared, the state becomes
+  `SYNCED`, and the event is not pushed again → `removedRemotely`.
+- `markSynced` sets `SYNCED`, `etag`, `last_synced_at` only when the sync state's `updated_at` is unchanged since it was read. If
+  the event was edited meanwhile it stays `DIRTY` for the next run, and the Google ID is still saved.
+- **Tables**: `calendar_sync_states` (read, update), `local_calendars` (delete).
 
-### 6. handleCalendarAutoSyncCron
+### 8. Reminders `[Implemented]`
 
-- **Task Description**: Scheduled background Cron Job that runs automatically at a fixed interval to perform silent bi-directional calendar synchronization without requiring any manual trigger. Internally calls `syncGoogleCalendar()` logic to:
-  1. Identify all `DIRTY` local events and push changes to Google Calendar API.
-  2. Pull any remote updates from Google Calendar that occurred since `last_synced_at`.
-  3. Detect and flag `CONFLICT` records where both local and remote changes exist simultaneously.
-  4. Logs sync outcomes (count of synced events, conflicts, errors) to application telemetry.
-  5. On repeated failures (e.g., Google Calendar API unavailability), backs off gracefully and logs the failure without throwing — ensuring the cron does not crash the NestJS process.
-- **Cron Schedule**: Configurable via `CALENDAR_AUTO_SYNC_CRON` env var (default: `*/15 * * * *` — every 15 minutes).
-- **Accessed Tables**: `local_calendars` (Read, Write), `calendar_sync_states` (Read, Write)
-- **AI Tool Integration**:
-  - **Is AI Tool**: `No`
-
-#### Input / Output
-
-- **Input**: None (Triggered automatically by NestJS `@Cron()` scheduler)
-
-- **Output**:
-  - `Promise<void>`: Resolves silently after sync completes or fails gracefully. Sync results are emitted via application logger only.
-
+- Not here: the reminder cron is `ProactiveService.handleFallbackCron` (every 10 minutes, events starting within 15
+  minutes, once per start time through `reminded_at`).

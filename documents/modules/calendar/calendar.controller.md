@@ -1,136 +1,58 @@
-# Calendar Proxy Controller
+# Calendar Controller
 
-- **Base Endpoint**: `/api/v1/calendar`
-- **General Description**: Controller handling local proxy calendar event management and manual synchronization triggers between local calendar records and external Google Calendar API.
+- **Class**: `CalendarController` — `server/src/calendar/calendar.controller.ts`
+- **Base endpoint**: `/api/v1/calendar`
+- **Auth**: every route needs the application JWT (global `JwtAuthGuard`).
+- **Response**: `{ statusCode, message, data }`.
+- **Description**: the local calendar. Local is the source of truth; changes are pushed one way to Google Calendar by
+  `POST /calendar/sync` and a cron. Pulling events from Google is not built.
 
----
+Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
 
-## List of Endpoints
+## Change log
 
-### 1. Get Calendar Events List
-
-- **Endpoint**: `GET /api/v1/calendar/events`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Retrieves local calendar events stored in the database within optional date range filters.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `GetCalendarEventsQueryDto`
-  - `startDate` (`string`, optional): ISO 8601 start date filter.
-  - `endDate` (`string`, optional): ISO 8601 end date filter.
-
-- **Response DTO**: `CalendarEventResponseDto[]`
-  - `id` (`string`): Local event UUID.
-  - `title` (`string`): Title of the event.
-  - `description` (`string`): Detailed description.
-  - `location` (`string`): Event location.
-  - `startTime` (`string`): ISO 8601 start timestamp.
-  - `endTime` (`string`): ISO 8601 end timestamp.
-  - `attendees` (`string[]`): Array of attendee email addresses.
-  - `intent` (`string`): Event intent classification.
-  - `priorityStatus` (`string`): Event priority level.
-  - `syncState` (`CalendarSyncStateResponseDto`): Associated Google Calendar sync state details.
-    - `googleEventId` (`string`): Google Calendar Event ID.
-    - `syncStatus` (`string`, enum: `['SYNCED', 'DIRTY', 'CONFLICT']`): Sync status.
-    - `lastSyncedAt` (`string`): ISO 8601 timestamp of last sync.
-    - `etag` (`string`): ETag token from Google Calendar API for concurrency conflict detection.
+| Date | Change |
+|------|--------|
+| 2026-10-16 | Rewritten from the code. Base path is `/calendar` (was `/calendar/events`); update is `PATCH` (was `PUT`); sync is one-way push (was bi-directional). Added `POST /calendar/sync` and the soft-delete rule. Query uses `fromDate` / `toDate`. Pull sync and conflict handling are `[De-scoped]`. |
+| 2026-10-16 | Review fixes: pull sync and conflict handling are `[De-scoped]` (as in `summary.md`), not `[Planned]`. |
 
 ---
 
-### 2. Create Calendar Event
+## Endpoints
 
-- **Endpoint**: `POST /api/v1/calendar/events`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Creates a new event in the local calendar database and automatically triggers synchronization to Google Calendar API.
+### 1. Push now — `POST /api/v1/calendar/sync` `[Implemented]`
 
-#### Data Transfer Objects (DTO)
+- **Handler**: `syncNow()` → `CalendarSyncService.syncLocalToGoogle`. Returns 200.
+- **Response `data`**: `{ pushed, deleted, removedRemotely, failed }`, or `null` when Google is not connected or another
+  run is in progress.
 
-- **Request DTO**: `CreateCalendarEventDto`
-  - `title` (`string`, required): Title of the calendar event.
-  - `description` (`string`, optional): Description or notes for the event.
-  - `location` (`string`, optional): Event location.
-  - `startTime` (`string`, required): ISO 8601 start timestamp.
-  - `endTime` (`string`, required): ISO 8601 end timestamp.
-  - `attendees` (`string[]`, optional): Array of attendee emails.
-  - `intent` (`string`, optional): Intent tag or context.
-  - `priorityStatus` (`string`, optional): Priority level.
+### 2. Create — `POST /api/v1/calendar` `[Implemented]`
 
-- **Response DTO**: `CalendarEventResponseDto`
-  - `id` (`string`): Local event UUID.
-  - `title` (`string`): Event title.
-  - `description` (`string`): Event description.
-  - `location` (`string`): Event location.
-  - `startTime` (`string`): Event start time.
-  - `endTime` (`string`): Event end time.
-  - `attendees` (`string[]`): List of attendees.
-  - `intent` (`string`): Event intent.
-  - `priorityStatus` (`string`): Priority status.
-  - `syncState` (`CalendarSyncStateResponseDto`): Google Calendar sync metadata.
+- **Handler**: `createEvent(dto)`. Returns 201, with `syncState` (`syncStatus: DIRTY`).
+- **Request** `CreateEventDto`: `title`, `startTime`, `endTime` (dates) required; `description?`, `location?`,
+  `attendees?` (array), `intent?`, `priorityStatus?`. `endTime` must be after `startTime`, else 400.
 
----
+### 3. List — `GET /api/v1/calendar?fromDate=&toDate=` `[Implemented]`
 
-### 3. Update Calendar Event
+- **Handler**: `getEvents(query)`. **Query** `QueryCalendarDto`: `fromDate?`, `toDate?`. Events that overlap the range
+  (start at or before `toDate`, end at or after `fromDate`), ordered by start time, without soft-deleted rows.
 
-- **Endpoint**: `PUT /api/v1/calendar/events/:id`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Edits an existing local calendar event and updates the dirty sync state for reconciliation with Google Calendar API.
+### 4. Get one — `GET /api/v1/calendar/:id` `[Implemented]`
 
-#### Data Transfer Objects (DTO)
+- **Handler**: `getEventById(id)`. With `syncState`. 404 when missing or soft-deleted.
 
-- **Request DTO**: `UpdateCalendarEventDto`
-  - `id` (`string`, path param): Local event UUID.
-  - `title` (`string`, optional): Updated event title.
-  - `description` (`string`, optional): Updated description.
-  - `location` (`string`, optional): Updated location.
-  - `startTime` (`string`, optional): Updated ISO 8601 start timestamp.
-  - `endTime` (`string`, optional): Updated ISO 8601 end timestamp.
-  - `attendees` (`string[]`, optional): Updated attendees list.
-  - `intent` (`string`, optional): Updated intent.
-  - `priorityStatus` (`string`, optional): Updated priority status.
+### 5. Update — `PATCH /api/v1/calendar/:id` `[Implemented]`
 
-- **Response DTO**: `CalendarEventResponseDto`
-  - `id` (`string`): Event UUID.
-  - `title` (`string`): Updated title.
-  - `description` (`string`): Updated description.
-  - `location` (`string`): Updated location.
-  - `startTime` (`string`): Updated start time.
-  - `endTime` (`string`): Updated end time.
-  - `attendees` (`string[]`): Updated attendees.
-  - `intent` (`string`): Updated intent.
-  - `priorityStatus` (`string`): Updated priority.
-  - `syncState` (`CalendarSyncStateResponseDto`): Updated sync state.
+- **Handler**: `updateEvent(id, dto)`. **Request** `UpdateEventDto`: every field of `CreateEventDto`, optional. The range
+  is checked against the stored values for a field not sent (400). Marks `syncState` `DIRTY`. A new `startTime` clears
+  `reminded_at`, so the reminder fires again.
 
----
+### 6. Delete — `DELETE /api/v1/calendar/:id` `[Implemented]`
 
-### 4. Delete Calendar Event
+- **Handler**: `deleteEvent(id)`. `data`: `{ success: true }`. An event already on Google is soft-deleted
+  (`deleted_at`) and `DIRTY`; the next sync deletes it on Google and then removes the row. An event never pushed is
+  deleted at once.
 
-- **Endpoint**: `DELETE /api/v1/calendar/events/:id`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Deletes a local calendar event and removes or cancels the synced event from Google Calendar API.
+## Not built `[De-scoped]`
 
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: `DeleteCalendarEventParamsDto`
-  - `id` (`string`, path param): Local event UUID to delete.
-
-- **Response DTO**: `DeleteCalendarEventResponseDto`
-  - `success` (`boolean`): Operation success status.
-  - `message` (`string`): Status description message.
-
----
-
-### 5. Trigger Manual Calendar Sync
-
-- **Endpoint**: `POST /api/v1/calendar/sync`
-- **Guard / Auth**: `AuthGuard('jwt')`
-- **Description**: Triggers a manual bi-directional synchronization between the local database proxy (`local_calendars`) and the Google Calendar API, reconciling records in `calendar_sync_states` based on `SYNCED`, `DIRTY`, and `CONFLICT` status markers and ETag comparison.
-
-#### Data Transfer Objects (DTO)
-
-- **Request DTO**: None
-
-- **Response DTO**: `CalendarSyncResponseDto`
-  - `success` (`boolean`): Sync process status.
-  - `syncedCount` (`number`): Number of events synchronized to Google Calendar.
-  - `conflictCount` (`number`): Number of sync conflicts detected and flagged.
-  - `lastSyncedAt` (`string`): ISO 8601 timestamp of sync completion.
+- Pull sync from Google, conflict handling (`CONFLICT` exists in `SyncStatus` but nothing sets it).

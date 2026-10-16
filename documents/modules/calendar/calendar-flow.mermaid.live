@@ -1,58 +1,58 @@
+%% Calendar module flow, drawn from server/src/calendar (checked 2026-10-16).
+%% Change log
+%% 2026-10-16: Rewritten from the code. Sync is one-way (local to Google) with patch, client-generated event ID,
+%%             soft delete and POST /calendar/sync; cron expression comes from CALENDAR_SYNC_CRON.
+%% 2026-10-16: Review fix: `;` ends a statement in a sequence diagram; replaced in two messages so the diagram parses.
 sequenceDiagram
     autonumber
-    actor User as Client / User
+    actor Client as Client / Owner
     participant Ctrl as CalendarController
-    participant Svc as CalendarService (@AiTool)
-    participant Sync as CalendarSyncService (@Cron)
-    participant DB as Database (PostgreSQL)
+    participant Svc as CalendarService
+    participant Tools as CalendarTools (AI tools)
+    participant Sync as CalendarSyncService
+    participant DB as PostgreSQL
     participant GAPI as Google Calendar API v3
 
-    %% -------------------------------------------------------------
-    %% LUỒNG 1: CRUD & ĐÁNH DẤU TRẠNG THÁI DIRTY
-    %% -------------------------------------------------------------
     rect rgb(240, 248, 255)
-        note over User, DB: 1. Thao tác CRUD Lịch Cục Bộ (Local Calendar)
-        User->>Ctrl: HTTP Request (POST / PATCH / DELETE /api/v1/calendar)
-        Ctrl->>Svc: Gọi method (createEvent / updateEvent / deleteEvent)
-        Svc->>DB: Ghi/Sửa/Xóa LocalCalendar
-        Svc->>DB: Upsert CalendarSyncState (syncStatus = 'DIRTY')
-        DB-->>Svc: Trả về kết quả đã cập nhật
-        Svc-->>Ctrl: Trả về dữ liệu Event
-        Ctrl-->>User: HTTP Response { statusCode: 200/201, data }
+    note over Client, DB: 1. CRUD on the local calendar
+    Client->>Ctrl: POST / GET / PATCH / DELETE /calendar
+    Ctrl->>Svc: createEvent / getEvents / updateEvent / deleteEvent
+    Svc->>DB: local_calendars, calendar_sync_states = DIRTY on create and update
+    alt delete, event already on Google
+        Svc->>DB: deleted_at = now, sync state DIRTY
+    else delete, never pushed
+        Svc->>DB: delete the row
+    end
+    Ctrl-->>Client: { statusCode, message, data }
     end
 
-    %% -------------------------------------------------------------
-    %% LUỒNG 2: AI AGENT INTERACTION VIA @AiTool
-    %% -------------------------------------------------------------
     rect rgb(245, 245, 220)
-        note over Svc, DB: 2. Tương tác từ AI Agent (Function Calling via @AiTool)
-        participant AI as AI Agent Engine
-        AI->>Svc: Triệu gọi Tool (@AiTool: create_calendar_event / get_calendar_events / ...)
-        Svc->>DB: Truy vấn hoặc cập nhật LocalCalendar & CalendarSyncState ('DIRTY')
-        DB-->>Svc: Kết quả DB
-        Svc-->>AI: Trả dữ liệu JSON cho AI tổng hợp câu trả lời
+    note over Tools, DB: 2. AI tools
+    Tools->>Svc: get_calendar_events, create_calendar_event (run in the chat)
+    Tools->>Svc: update_calendar_event, delete_calendar_event (only after POST /ai-agent/actions/:id/confirm)
     end
 
-    %% -------------------------------------------------------------
-    %% LUỒNG 3: CRONJOB ĐỒNG BỘ NGẦM VỚI GOOGLE CALENDAR
-    %% -------------------------------------------------------------
     rect rgb(240, 255, 240)
-        note over Sync, GAPI: 3. Cronjob Đồng Bộ Ngầm (Mỗi 5 phút)
-        Sync->>Sync: Tự động kích hoạt @Cron(EVERY_5_MINUTES)
-        Sync->>DB: Lấy OAuth Tokens của Master User (googleAccessToken)
-        DB-->>Sync: Trả về Tokens
-        Sync->>DB: Query các bản ghi CalendarSyncState (syncStatus = 'DIRTY')
-        DB-->>Sync: Trả về danh sách sự kiện cần đồng bộ
-
-        loop Với mỗi sự kiện DIRTY
-            alt Sự kiện chưa có googleEventId (Tạo mới trên Google)
-                Sync->>GAPI: events.insert(calendarId: 'primary', resource)
-                GAPI-->>Sync: Trả về Google Event ID & eTag
-            else Sự kiện đã có googleEventId (Cập nhật trên Google)
-                Sync->>GAPI: events.update(calendarId: 'primary', eventId, resource)
-                GAPI-->>Sync: Trả về updated eTag
+    note over Client, GAPI: 3. One-way push, local to Google
+    Sync->>Sync: cron from CALENDAR_SYNC_CRON (default every 5 minutes), or POST /calendar/sync
+    Sync->>DB: Google tokens (decrypted), DIRTY sync states with their events
+    note over Sync: no tokens, or a run in progress: skip (data null)
+    loop each DIRTY event
+        alt soft-deleted
+            Sync->>GAPI: events.delete (404 / 410 ignored)
+            Sync->>DB: delete the local row
+        else no google_event_id
+            Sync->>GAPI: events.insert (id = local UUID without dashes, 409 means already created)
+            Sync->>DB: SYNCED, etag, last_synced_at
+        else has google_event_id
+            Sync->>GAPI: events.patch (summary, description, location, start, end)
+            alt 404 / 410, deleted on Google
+                Sync->>DB: clear google_event_id, SYNCED (not pushed again)
+            else ok
+                Sync->>DB: SYNCED, etag, last_synced_at
             end
-
-            Sync->>DB: Cập nhật CalendarSyncState (syncStatus = 'SYNCED', eTag, lastSyncedAt = NOW())
         end
+    end
+    note over Sync, DB: SYNCED only if the sync state was not edited meanwhile, else it stays DIRTY
+    Sync-->>Client: POST /calendar/sync returns { pushed, deleted, removedRemotely, failed }
     end
