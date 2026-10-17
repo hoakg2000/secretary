@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { Schema, Type } from '@google/genai';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EmailRuleType } from '@prisma/client';
-import { GenAiProvider } from '../ai-agent/genai.provider';
-import { CHAT_MODEL } from '../ai-agent/services/agent/agent.service';
+import { LLM_TYPE, LlmService, stripJsonFence } from '../llm/llm.service';
 
 const CATEGORIES = ['TRANSACTION', 'EVENT', 'OTHER'] as const;
 
@@ -56,34 +54,32 @@ const TASKS: Record<EmailRuleType | 'none', string> = {
   none: `No rule matched this sender: decide the category yourself. TRANSACTION is a bank or payment notice about a real balance change of the owner's account; EVENT is a meeting or appointment with a stated start time; everything else is OTHER. ${TRANSACTION_FIELDS} ${EVENT_FIELDS} "urgent" is true only when the owner must act today.`,
 };
 
-const RESPONSE_SCHEMA: Schema = {
-  type: Type.OBJECT,
+const RESPONSE_SCHEMA = {
+  type: 'object',
   properties: {
-    category: { type: Type.STRING, enum: [...CATEGORIES] },
-    urgent: { type: Type.BOOLEAN },
-    summary: { type: Type.STRING },
+    category: { type: 'string', enum: [...CATEGORIES] },
+    urgent: { type: 'boolean' },
+    summary: { type: 'string' },
     transaction: {
-      type: Type.OBJECT,
-      nullable: true,
+      type: ['object', 'null'],
       properties: {
-        amount: { type: Type.NUMBER },
-        direction: { type: Type.STRING, enum: ['INCOME', 'EXPENSE'] },
-        currency: { type: Type.STRING },
-        accountNumber: { type: Type.STRING },
-        bankCode: { type: Type.STRING },
-        counterparty: { type: Type.STRING },
-        time: { type: Type.STRING },
+        amount: { type: 'number' },
+        direction: { type: 'string', enum: ['INCOME', 'EXPENSE'] },
+        currency: { type: 'string' },
+        accountNumber: { type: 'string' },
+        bankCode: { type: 'string' },
+        counterparty: { type: 'string' },
+        time: { type: 'string' },
       },
       required: ['amount', 'direction'],
     },
     event: {
-      type: Type.OBJECT,
-      nullable: true,
+      type: ['object', 'null'],
       properties: {
-        title: { type: Type.STRING },
-        start: { type: Type.STRING },
-        end: { type: Type.STRING },
-        location: { type: Type.STRING },
+        title: { type: 'string' },
+        start: { type: 'string' },
+        end: { type: 'string' },
+        location: { type: 'string' },
       },
       required: ['title', 'start'],
     },
@@ -98,7 +94,7 @@ const RESPONSE_SCHEMA: Schema = {
 @Injectable()
 export class EmailAiService {
   constructor(
-    private readonly genAi: GenAiProvider,
+    private readonly llm: LlmService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -124,18 +120,14 @@ export class EmailAiService {
     email: EmailContent,
     ruleType: EmailRuleType | null,
   ): Promise<EmailClassification> {
-    const response = await this.genAi.get().models.generateContent({
-      model: CHAT_MODEL,
-      contents: this.buildPrompt(email, ruleType),
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: 'application/json',
-        responseSchema: RESPONSE_SCHEMA,
-      },
+    const text = await this.llm.completeLLM(LLM_TYPE, {
+      system: SYSTEM_INSTRUCTION,
+      messages: [{ role: 'user', content: this.buildPrompt(email, ruleType) }],
+      jsonSchema: RESPONSE_SCHEMA,
     });
 
     // Model trả sai dạng -> ném lỗi để job được retry
-    const result = JSON.parse(response.text ?? '') as EmailClassification;
+    const result = JSON.parse(stripJsonFence(text)) as EmailClassification;
     if (
       !CATEGORIES.includes(result?.category) ||
       typeof result.summary !== 'string'

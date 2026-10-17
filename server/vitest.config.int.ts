@@ -26,6 +26,7 @@ export default defineConfig({
       GOOGLE_CLIENT_SECRET: 'test-client-secret',
       TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
       GEMINI_API_KEY: 'test',
+      MOT_API_KEY: 'test-mot-key',
       FISH_AUDIO_API_KEY: 'test',
       TELEGRAM_BOT_TOKEN: 'test',
       TELEGRAM_CHAT_ID: 'test',

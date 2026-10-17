@@ -12,9 +12,22 @@ type Reply = Response | ((call: RecordedCall) => Response | Promise<Response>);
 export const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
+/** Server-sent-events body: each item is one `data:` line, then `[DONE]`; `pieces` cuts the bytes into chunks of that size */
+export const sseResponse = (items: unknown[], pieces = Infinity) => {
+  const raw = [...items.map((i) => `data: ${JSON.stringify(i)}\n\n`), 'data: [DONE]\n\n'].join('');
+  const bytes = new TextEncoder().encode(raw);
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let i = 0; i < bytes.length; i += Math.min(pieces, bytes.length)) controller.enqueue(bytes.slice(i, i + pieces));
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+};
+
 /**
  * Global fetch stub routed by URL substring. Unknown URLs throw, so nothing reaches a real host.
- * Defaults after reset(): Telegram answers 200 {ok:true}, Fish.audio answers 200 with 3 audio bytes.
+ * Defaults after reset(): motapis.com throws (script it with respond), Telegram answers 200 {ok:true}, Fish.audio answers 200 with 3 audio bytes.
  */
 export function createFetchStub() {
   const routes = new Map<string, Reply>();
@@ -22,6 +35,9 @@ export function createFetchStub() {
 
   const defaults = () => {
     routes.set('api.telegram.org', () => jsonResponse({ ok: true }));
+    routes.set('motapis.com', () => {
+      throw new Error('unscripted motapis.com call');
+    });
     routes.set('api.fish.audio', () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
   };
   defaults();

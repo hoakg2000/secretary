@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
@@ -10,7 +10,10 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 import type { TestProject } from 'vitest/node';
 import { seedCharacters } from '../../prisma/seed-characters';
-import { CHAT_MODEL, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
+import { REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
+import { GeminiClient } from '../../src/llm/gemini.client';
+import { LLM_MODELS, LLM_TYPE, LlmService } from '../../src/llm/llm.service';
+import { MotApiClient } from '../../src/llm/motapi.client';
 import { classifyThirdParty, type ThirdPartyKind } from './support/classify';
 import { excerpt, redact } from './support/redact';
 
@@ -57,21 +60,14 @@ async function preflight(env: Record<string, string>): Promise<Check[]> {
   }
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
-  await run(`generateContent ${CHAT_MODEL} with REPLY_SCHEMA and a tool`, () =>
-    ai.models.generateContent({
-      model: CHAT_MODEL,
-      contents: 'Chào bạn',
-      config: {
-        responseMimeType: 'application/json',
-        responseJsonSchema: REPLY_SCHEMA,
-        tools: [
-          {
-            functionDeclarations: [
-              { name: 'get_time', description: 'Giờ hiện tại', parameters: { type: Type.OBJECT, properties: {} } },
-            ],
-          },
-        ],
-      },
+  // the hardcoded provider, through the same clients the app uses
+  const config = { get: (key: string) => env[key] } as never;
+  const llm = new LlmService(new GeminiClient({ get: () => ai } as never), new MotApiClient(config));
+  await run(`sendMessageLLM ${LLM_TYPE} ${LLM_MODELS[LLM_TYPE]} with REPLY_SCHEMA and a tool`, () =>
+    llm.completeLLM(LLM_TYPE, {
+      messages: [{ role: 'user', content: 'Chào bạn' }],
+      jsonSchema: REPLY_SCHEMA,
+      tools: [{ name: 'get_time', description: 'Giờ hiện tại', parameters: { type: 'object', properties: {} } }],
     }),
   );
   // same default as MemoryService.generateEmbedding
@@ -109,7 +105,7 @@ function writePreflightReport(runDir: string, checks: Check[]) {
       'No flow ran and no further call was made. Verify the Gemini key / quota / model in Google AI Studio, then re-run.',
       kind === 'THIRD_PARTY_AUTH' ? 'The key in server/.env (GEMINI_API_KEY) is rejected or lacks permission.' : '',
       kind === 'THIRD_PARTY_QUOTA' ? 'The key is rate limited or out of quota (429 / RESOURCE_EXHAUSTED).' : '',
-      kind === 'THIRD_PARTY_MODEL' ? `The model "${CHAT_MODEL}" (or the embedding model) is not available to this key.` : '',
+      kind === 'THIRD_PARTY_MODEL' ? `The model "${LLM_MODELS[LLM_TYPE]}" (or the embedding model) is not available to this key.` : '',
     );
   }
   mkdirSync(runDir, { recursive: true });

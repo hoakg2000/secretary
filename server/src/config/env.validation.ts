@@ -72,6 +72,10 @@ export class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
+  MOT_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
   FISH_AUDIO_API_KEY?: string;
 
   // 32 bytes, base64 (44 ký tự). Bắt buộc khi bật Google OAuth vì token Google được mã hóa trước khi lưu

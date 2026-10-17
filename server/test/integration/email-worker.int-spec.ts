@@ -1,4 +1,5 @@
 import { EmailRuleType } from '@prisma/client';
+import { LLM_TYPE } from '../../src/llm/llm.service';
 import { EmailAiService } from '../../src/email/email-ai.service';
 import { EmailService } from '../../src/email/email.service';
 import {
@@ -6,9 +7,11 @@ import {
   createTestModule,
   expectRejection,
   jsonResponse,
+  type LlmRound,
   resetState,
   seedAccount,
   seedEmailRule,
+  text,
   waitForJob,
   waitForStatus,
   type TestContext,
@@ -39,7 +42,7 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
     ...data,
   });
   const answer = (result: Record<string, unknown>) =>
-    ctx.genAi.generateContent.mockResolvedValue(classification({ summary: SUMMARY, ...result }));
+    ctx.llm.answerAll(classification({ summary: SUMMARY, ...result }));
   /** ingest, then wait for the real worker to finish the job */
   const run = async (data: Record<string, unknown> = {}) => {
     const ingested = (await emails.ingest(mail(data)))!;
@@ -319,13 +322,11 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
       const done = await run();
 
       expect((await logOf(done.emailLogId)).status).toBe('PROCESSED');
-      expect(ctx.genAi.generateContent).toHaveBeenCalledTimes(1);
+      expect(ctx.llm.sendMessageLLM).toHaveBeenCalledTimes(1);
     });
 
     it('does not notify for an urgent flag that is not exactly true', async () => {
-      ctx.genAi.generateContent.mockResolvedValue({
-        text: JSON.stringify({ category: 'OTHER', summary: SUMMARY, urgent: 'true' }),
-      });
+      ctx.llm.answerAll([text(JSON.stringify({ category: 'OTHER', summary: SUMMARY, urgent: 'true' }))]);
 
       await run();
 
@@ -347,14 +348,14 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
       const returned = await waitForJob(ctx, job.id!);
 
       expect(returned).toEqual({ success: true, emailLogId: log.id, status: 'PROCESSED' });
-      expect(ctx.genAi.generateContent).not.toHaveBeenCalled();
+      expect(ctx.llm.sendMessageLLM).not.toHaveBeenCalled();
       expect((await logOf(log.id)).aiSummary).toBe('kept');
       expect(await events()).toHaveLength(0);
     });
   });
 
   describe('prompt selection by rule type', () => {
-    const promptOf = () => ctx.genAi.generateContent.mock.calls[0][0];
+    const promptOf = () => ctx.llm.calls[0].body.messages[0].content as string;
 
     it('uses the finance prompt for a moneylist sender', async () => {
       await seedEmailRule(ctx.prisma, { type: EmailRuleType.moneylist, matchValue: 'alerts@bank' });
@@ -363,7 +364,7 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
       const done = await run();
 
       expect(done.ruleType).toBe('moneylist');
-      expect(promptOf().contents).toContain("owner's finance list");
+      expect(promptOf()).toContain("owner's finance list");
     });
 
     it('uses the important-sender prompt for a whitelist sender', async () => {
@@ -372,7 +373,7 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
 
       await run();
 
-      expect(promptOf().contents).toContain("owner's list of important senders");
+      expect(promptOf()).toContain("owner's list of important senders");
     });
 
     it('uses the no-rule prompt when no rule matches', async () => {
@@ -380,7 +381,7 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
 
       await run();
 
-      expect(promptOf().contents).toContain('No rule matched this sender');
+      expect(promptOf()).toContain('No rule matched this sender');
     });
 
     it('sends the email content and a JSON response config to the model', async () => {
@@ -388,13 +389,17 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
 
       await run({ subject: 'Special subject', rawBody: 'Special body' });
 
-      const request = promptOf();
-      expect(request.contents).toContain('From: Bank <alerts@bank.example>');
-      expect(request.contents).toContain('Subject: Special subject');
-      expect(request.contents).toContain('Special body');
-      expect(request.config).toMatchObject({ responseMimeType: 'application/json' });
-      expect(request.config.systemInstruction).toBeTruthy();
-      expect(request.config.tools).toBeUndefined();
+      const prompt = promptOf();
+      expect(prompt).toContain('From: Bank <alerts@bank.example>');
+      expect(prompt).toContain('Subject: Special subject');
+      expect(prompt).toContain('Special body');
+      const { type, body } = ctx.llm.calls[0];
+      expect(type).toBe(LLM_TYPE);
+      expect(body.messages).toHaveLength(1);
+      expect(body.messages[0].role).toBe('user');
+      expect(body.jsonSchema).toMatchObject({ type: 'object' });
+      expect(body.system).toBeTruthy();
+      expect(body.tools).toBeUndefined();
     });
   });
 
@@ -403,13 +408,13 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
       'retries an invalid model answer, marks the log FAILED after the last attempt, then reprocess succeeds',
       { timeout: 40_000 },
       async () => {
-        ctx.genAi.generateContent.mockResolvedValue({ text: 'this is not json' });
+        ctx.llm.answerAll([text('this is not json')]);
         const ingested = (await emails.ingest(mail()))!;
 
         const failed = await waitForStatus(ctx.prisma, ingested.emailLogId, 'FAILED', 35_000);
 
         expect(failed.aiSummary).toBeNull();
-        expect(ctx.genAi.generateContent).toHaveBeenCalledTimes(3);
+        expect(ctx.llm.sendMessageLLM).toHaveBeenCalledTimes(3);
         expect((await ctx.queue.getJob(ingested.emailLogId))!.attemptsMade).toBe(3);
 
         answer({ category: 'OTHER' });
@@ -417,7 +422,7 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
         await waitForJob(ctx, again.jobId!);
 
         expect(await logOf(ingested.emailLogId)).toMatchObject({ status: 'PROCESSED', aiSummary: SUMMARY });
-        expect(ctx.genAi.generateContent).toHaveBeenCalledTimes(4);
+        expect(ctx.llm.sendMessageLLM).toHaveBeenCalledTimes(4);
       },
     );
   });
@@ -473,29 +478,33 @@ describe('email worker integration (real queue + real EmailProcessor)', () => {
     const email = { sender: 's@x.com', subject: 'S', rawBody: 'B' };
 
     it('returns the parsed classification with the urgent flag as a boolean', async () => {
-      ctx.genAi.generateContent.mockResolvedValue({
-        text: JSON.stringify({ category: 'OTHER', summary: 'ok' }),
-      });
+      ctx.llm.answerAll([text(JSON.stringify({ category: 'OTHER', summary: 'ok' }))]);
 
       expect(await ai.classify(email, null)).toEqual({ category: 'OTHER', summary: 'ok', urgent: false });
     });
 
-    it.each([
-      ['text that is not JSON', { text: 'nope' }],
-      ['no text', {}],
-      ['an unknown category', { text: JSON.stringify({ category: 'SPAM', summary: 's' }) }],
-      ['a missing category', { text: JSON.stringify({ summary: 's' }) }],
-      ['a missing summary', { text: JSON.stringify({ category: 'OTHER' }) }],
-      ['a summary that is not a string', { text: JSON.stringify({ category: 'OTHER', summary: 5 }) }],
-      ['JSON null', { text: 'null' }],
+    it.each<[string, LlmRound]>([
+      ['text that is not JSON', [text('nope')]],
+      ['no text', []],
+      ['an unknown category', [text(JSON.stringify({ category: 'SPAM', summary: 's' }))]],
+      ['a missing category', [text(JSON.stringify({ summary: 's' }))]],
+      ['a missing summary', [text(JSON.stringify({ category: 'OTHER' }))]],
+      ['a summary that is not a string', [text(JSON.stringify({ category: 'OTHER', summary: 5 }))]],
+      ['JSON null', [text('null')]],
     ])('rejects %s', async (_name, response) => {
-      ctx.genAi.generateContent.mockResolvedValue(response);
+      ctx.llm.answerAll(response);
 
       await expectRejection(ai.classify(email, null), Error); // SyntaxError from JSON.parse or the schema Error
     });
 
+    it('parses a classification the model wrapped in a json code fence', async () => {
+      ctx.llm.answerAll([text('```json\n' + JSON.stringify({ category: 'OTHER', summary: 'ok' }) + '\n```')]);
+
+      expect(await ai.classify(email, null)).toEqual({ category: 'OTHER', summary: 'ok', urgent: false });
+    });
+
     it('passes a model failure through', async () => {
-      ctx.genAi.generateContent.mockRejectedValue(new Error('quota'));
+      ctx.llm.answerAll([new Error('quota')]);
 
       await expect(ai.classify(email, null)).rejects.toThrow('quota');
     });

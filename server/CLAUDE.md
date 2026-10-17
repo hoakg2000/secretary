@@ -30,6 +30,7 @@ Specs live in `test/integration/`. Run every spec listed for each folder you cha
 | `src/email/**` | `email`, `email-worker`, `gmail-push` |
 | `src/proactive/**` | `proactive`, `email-worker`, `chat` |
 | `src/ai-agent/services/memory/**`, `src/ai-agent/tools/**`, `src/ai-agent/queries/**`, `rag-chunk/**` | `memory`, `chat` |
+| `src/llm/**` | `llm`, `chat`, `email-worker`, `memory` |
 | `src/ai-agent/services/tts/**` | `tts` |
 | other `src/ai-agent/**` (agent, chat, controller, DTOs, `genai.provider.ts`) | `chat`, `memory`, `tts`, `misc` |
 | `src/common/**`, `src/config/**`, `src/prisma/**`, `src/app.*`, `src/main.ts`, `prisma/schema.prisma`, `prisma/migrations/**`, `test/integration/harness.ts`, `test/integration/support/**`, `test/integration/global-setup.ts`, `vitest.config*.ts`, `package.json` | full suite: `npm run test:int` |

@@ -4,13 +4,14 @@ import { lastValueFrom, toArray } from 'rxjs';
 import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
 import prompt from '../../src/ai-agent/prompts/data.json';
 import { ReplyStreamParser } from '../../src/ai-agent/services/agent/reply-stream.parser';
-import { AgentService, CHAT_MODEL, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
+import { AgentService, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
 import { buildCharacterPrompt } from '../../src/character/character-prompt';
 import { ChatSessionService } from '../../src/ai-agent/services/chat/chat-session.service';
+import { LLM_MODELS, LLM_TYPE } from '../../src/llm/llm.service';
+import type { LlmMessage } from '../../src/llm/llm.types';
 import { MemoryService } from '../../src/ai-agent/services/memory/memory.service';
 import {
   MISSING,
-  calls,
   chunkAt,
   chunkBySize,
   createTestModule,
@@ -23,6 +24,7 @@ import {
   seedCharacter,
   seedUser,
   text,
+  toolCalls,
   type TestContext,
 } from './harness';
 
@@ -161,9 +163,9 @@ describe('chat integration', () => {
         const history = await sessions.recentHistory(session.id, rows[24].id);
 
         expect(history).toHaveLength(20);
-        expect(history[0]).toEqual({ role: 'user', parts: [{ text: 'm4' }] });
-        expect(history[1]).toEqual({ role: 'model', parts: [{ text: 'm5' }] });
-        expect(history[19]).toEqual({ role: 'model', parts: [{ text: 'm23' }] });
+        expect(history[0]).toEqual({ role: 'user', content: 'm4' });
+        expect(history[1]).toEqual({ role: 'assistant', content: 'm5' });
+        expect(history[19]).toEqual({ role: 'assistant', content: 'm23' });
       });
 
       it('honours a smaller limit and excludes the cursor and newer messages', async () => {
@@ -176,7 +178,7 @@ describe('chat integration', () => {
 
         const history = await sessions.recentHistory(session.id, rows[4].id, 2);
 
-        expect(history.map((t) => t.parts[0].text)).toEqual(['m2', 'm3']);
+        expect(history.map((t) => t.content)).toEqual(['m2', 'm3']);
       });
 
       it('drops rows with empty text', async () => {
@@ -189,7 +191,7 @@ describe('chat integration', () => {
 
         const history = await sessions.recentHistory(session.id, current.id);
 
-        expect(history.map((t) => t.parts[0].text)).toEqual(['q', 'q2']);
+        expect(history.map((t) => t.content)).toEqual(['q', 'q2']);
       });
 
       it('drops leading model turns so the history starts with the user', async () => {
@@ -202,7 +204,7 @@ describe('chat integration', () => {
 
         const history = await sessions.recentHistory(session.id, current.id);
 
-        expect(history.map((t) => t.parts[0].text)).toEqual(['q', 'a']);
+        expect(history.map((t) => t.content)).toEqual(['q', 'a']);
       });
 
       it('returns an empty history when there is no user turn', async () => {
@@ -224,7 +226,7 @@ describe('chat integration', () => {
 
         const history = await sessions.recentHistory(a.id, current.id);
 
-        expect(history.map((t) => t.parts[0].text)).toEqual(['mine']);
+        expect(history.map((t) => t.content)).toEqual(['mine']);
       });
     });
 
@@ -393,7 +395,10 @@ describe('chat integration', () => {
         .map((f) => f.content)
         .join('');
     const types = (frames: { type: string }[]) => frames.map((f) => f.type);
-    const instructionOf = (callIndex = 0) => ctx.genAi.create.mock.calls[callIndex][0].config.systemInstruction as string;
+    const instructionOf = (callIndex = 0) => ctx.llm.calls[callIndex].body.system as string;
+    /** the tool messages the agent sent back to the model in call `callIndex` */
+    const toolMessagesOf = (callIndex: number) =>
+      ctx.llm.calls[callIndex].body.messages.filter((m): m is Extract<LlmMessage, { role: 'tool' }> => m.role === 'tool');
     const withCharacter = (data: Record<string, unknown> = {}) =>
       ctx.prisma.character.create({
         data: {
@@ -409,7 +414,7 @@ describe('chat integration', () => {
       it('emits the session frame first, then text, then done, and persists both messages', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push(chunkBySize(replyJson('Hi there', 'jp'), 18));
+        ctx.llm.script.push(chunkBySize(replyJson('Hi there', 'jp'), 18));
 
         const frames = await stream(user.id, { message: 'hello bot', characterId: character.id });
 
@@ -436,7 +441,7 @@ describe('chat integration', () => {
         await expect(stream(user.id, {})).rejects.toBeInstanceOf(BadRequestException);
 
         expect(await ctx.prisma.chatSession.count()).toBe(0);
-        expect(ctx.genAi.create).not.toHaveBeenCalled();
+        expect(ctx.llm.sendMessageLLM).not.toHaveBeenCalled();
       });
 
       it('rejects an unknown characterId with 404, creates nothing and does not call the model', async () => {
@@ -446,7 +451,7 @@ describe('chat integration', () => {
 
         expect(await ctx.prisma.chatSession.count()).toBe(0);
         expect(await ctx.prisma.chatMessage.count()).toBe(0);
-        expect(ctx.genAi.create).not.toHaveBeenCalled();
+        expect(ctx.llm.sendMessageLLM).not.toHaveBeenCalled();
       });
 
       it('rejects an unknown sessionId with 404 without calling the model', async () => {
@@ -454,7 +459,7 @@ describe('chat integration', () => {
 
         await expect(stream(user.id, { sessionId: MISSING })).rejects.toBeInstanceOf(NotFoundException);
 
-        expect(ctx.genAi.create).not.toHaveBeenCalled();
+        expect(ctx.llm.sendMessageLLM).not.toHaveBeenCalled();
       });
 
       it('rejects another user session with 404 and stores nothing', async () => {
@@ -465,7 +470,7 @@ describe('chat integration', () => {
         await expect(stream(other.id, { sessionId: session.id })).rejects.toBeInstanceOf(NotFoundException);
 
         expect(await ctx.prisma.chatMessage.count()).toBe(0);
-        expect(ctx.genAi.create).not.toHaveBeenCalled();
+        expect(ctx.llm.sendMessageLLM).not.toHaveBeenCalled();
       });
 
       it('continues an existing session with its stored character and ignores dto.characterId', async () => {
@@ -473,7 +478,7 @@ describe('chat integration', () => {
         const stored = await withCharacter({ name: 'StoredName' });
         const other = await withCharacter({ name: 'OtherName' });
         const session = await makeSession(user.id, { characterId: stored.id });
-        ctx.genAi.script.push(reply('ok'));
+        ctx.llm.script.push(reply('ok'));
 
         const frames = await stream(user.id, { sessionId: session.id, characterId: other.id });
 
@@ -486,7 +491,7 @@ describe('chat integration', () => {
       it('continues an existing session without characterId in the request', async () => {
         const user = await seedUser(ctx.prisma);
         const session = await makeSession(user.id);
-        ctx.genAi.script.push(reply('ok'));
+        ctx.llm.script.push(reply('ok'));
 
         const frames = await stream(user.id, { sessionId: session.id });
 
@@ -498,15 +503,15 @@ describe('chat integration', () => {
         const session = await makeSession(user.id);
         await makeMessage(session.id, 0, ChatRole.USER, 'earlier question');
         await makeMessage(session.id, 1, ChatRole.MODEL, 'earlier answer');
-        ctx.genAi.script.push(reply('ok'));
+        ctx.llm.script.push(reply('ok'));
 
         await stream(user.id, { sessionId: session.id, message: 'follow up' });
 
-        expect(ctx.genAi.create.mock.calls[0][0].history).toEqual([
-          { role: 'user', parts: [{ text: 'earlier question' }] },
-          { role: 'model', parts: [{ text: 'earlier answer' }] },
+        expect(ctx.llm.calls[0].body.messages).toEqual([
+          { role: 'user', content: 'earlier question' },
+          { role: 'assistant', content: 'earlier answer' },
+          { role: 'user', content: 'follow up' },
         ]);
-        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledWith({ message: 'follow up' });
       });
 
       it('moves last_message_at forward', async () => {
@@ -600,7 +605,7 @@ describe('chat integration', () => {
 
         await stream(user.id, { characterId: character.id });
 
-        const names = ctx.genAi.create.mock.calls[0][0].config.tools[0].functionDeclarations.map((d: any) => d.name);
+        const names = ctx.llm.calls[0].body.tools!.map((t) => t.name);
         expect(names).toEqual(
           expect.arrayContaining(['get_financial_summary', 'create_financial_transaction', 'save_user_memory', 'search_semantic_memory', 'search_emails']),
         );
@@ -647,23 +652,23 @@ describe('chat integration', () => {
       const run = async (script: any[]) => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push(script);
+        ctx.llm.script.push(script);
         const frames = await stream(user.id, { characterId: character.id });
         const modelRow = await ctx.prisma.chatMessage.findFirst({ where: { role: 'MODEL' } });
         return { frames, modelRow };
       };
 
-      it('configures the chat with the JSON schema, the chat model and the tools', async () => {
+      it('configures the request with the JSON schema, the provider type and the tools', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
 
         await stream(user.id, { characterId: character.id });
 
-        const params = ctx.genAi.create.mock.calls[0][0];
-        expect(params.model).toBe(CHAT_MODEL);
-        expect(params.config.responseMimeType).toBe('application/json');
-        expect(params.config.responseJsonSchema).toEqual(REPLY_SCHEMA);
-        expect(params.config.tools[0].functionDeclarations.length).toBeGreaterThan(0);
+        const { type, body } = ctx.llm.calls[0];
+        expect(type).toBe(LLM_TYPE);
+        expect(LLM_MODELS[type]).toBeTruthy();
+        expect(body.jsonSchema).toEqual(REPLY_SCHEMA);
+        expect(body.tools!.length).toBeGreaterThan(0);
       });
 
       // escaped quotes, a backslash, ạ and an emoji written as a surrogate pair of escapes
@@ -730,8 +735,8 @@ describe('chat integration', () => {
       it('separates the replies of two rounds with a blank line', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push(
-          [text(replyJson('Để mình kiểm tra.', '確認します。')), calls({ id: 'c1', name: 'get_financial_summary', args: {} })],
+        ctx.llm.script.push(
+          [text(replyJson('Để mình kiểm tra.', '確認します。')), toolCalls({ id: 'c1', name: 'get_financial_summary', args: {} })],
           [text(replyJson('Có tiền', 'お金があります'))],
         );
 
@@ -755,7 +760,7 @@ describe('chat integration', () => {
       it('runs a tool round and then saves the JSON reply of the next round', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([calls({ id: 'c1', name: 'get_financial_summary', args: {} })], chunkBySize(replyJson('Có tiền', 'お金があります'), 20));
+        ctx.llm.script.push([toolCalls({ id: 'c1', name: 'get_financial_summary', args: {} })], chunkBySize(replyJson('Có tiền', 'お金があります'), 20));
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -764,6 +769,16 @@ describe('chat integration', () => {
         const modelRow = await ctx.prisma.chatMessage.findFirstOrThrow({ where: { role: 'MODEL' } });
         expect(modelRow).toMatchObject({ content: 'Có tiền', contentJp: 'お金があります' });
         expect(modelRow.toolCalls).toMatchObject([{ tool: 'get_financial_summary' }]);
+      });
+
+      it('parses a reply the model wrapped in a json code fence', async () => {
+        const fenced = '```json\n' + replyJson('Xin chào', 'こんにちは') + '\n```';
+
+        const { frames, modelRow } = await run([text(fenced)]);
+
+        expect(types(frames)).not.toContain('error');
+        expect(textOf(frames)).toBe('Xin chào');
+        expect(modelRow).toMatchObject({ content: 'Xin chào', contentJp: 'こんにちは' });
       });
 
       it('stores a blank Japanese text as null', async () => {
@@ -778,7 +793,7 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         await seedAccount(ctx.prisma, { accountName: 'Savings', cachedBalance: 1234567 });
-        ctx.genAi.script.push([calls({ id: 'c1', name: 'get_financial_summary', args: {} })], reply('You have money'));
+        ctx.llm.script.push([toolCalls({ id: 'c1', name: 'get_financial_summary', args: {} })], reply('You have money'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -789,9 +804,8 @@ describe('chat integration', () => {
         expect(result.accounts[0]).toMatchObject({ accountName: 'Savings' });
         expect(Number(result.accounts[0].cachedBalance)).toBe(1234567);
         // the second model round answers the function call with the same result
-        const secondMessage = ctx.genAi.sendMessageStream.mock.calls[1][0].message;
-        expect(secondMessage).toEqual([
-          { functionResponse: { id: 'c1', name: 'get_financial_summary', response: { result } } },
+        expect(toolMessagesOf(1)).toEqual([
+          { role: 'tool', toolCallId: 'c1', name: 'get_financial_summary', content: { result } },
         ]);
       });
 
@@ -799,7 +813,7 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         await seedAccount(ctx.prisma);
-        ctx.genAi.script.push([calls({ name: 'get_financial_summary', args: {} })], reply('done'));
+        ctx.llm.script.push([toolCalls({ name: 'get_financial_summary', args: {} })], reply('done'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -811,26 +825,48 @@ describe('chat integration', () => {
       it('answers all function calls of one round in a single message', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push(
-          [calls({ id: 'a', name: 'get_financial_summary', args: {} }, { id: 'b', name: 'get_financial_summary', args: {} })],
+        ctx.llm.script.push(
+          [toolCalls({ id: 'a', name: 'get_financial_summary', args: {} }, { id: 'b', name: 'get_financial_summary', args: {} })],
           reply('ok'),
         );
 
         await stream(user.id, { characterId: character.id });
 
-        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledTimes(2);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message.map((p: any) => p.functionResponse.id)).toEqual(['a', 'b']);
+        expect(ctx.llm.sendMessageLLM).toHaveBeenCalledTimes(2);
+        expect(toolMessagesOf(1).map((m) => m.toolCallId)).toEqual(['a', 'b']);
+      });
+
+      it('replays the assistant tool calls and answers each with a tool message of the same id on the next call', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.llm.script.push(
+          [text(replyJson('Để mình xem.', 'jp')), toolCalls({ id: 'a', name: 'get_financial_summary', args: {} })],
+          reply('ok'),
+        );
+
+        await stream(user.id, { characterId: character.id, message: 'how much' });
+
+        const [first, second] = ctx.llm.calls.map((c) => c.body.messages);
+        expect(first).toEqual([{ role: 'user', content: 'how much' }]);
+        expect(second.slice(0, 1)).toEqual(first);
+        expect(second[1]).toMatchObject({
+          role: 'assistant',
+          content: replyJson('Để mình xem.', 'jp'),
+          toolCalls: [{ id: 'a', name: 'get_financial_summary', args: {} }],
+        });
+        expect(second[2]).toMatchObject({ role: 'tool', toolCallId: 'a', name: 'get_financial_summary' });
+        expect(second).toHaveLength(3);
       });
 
       it('reports an unknown tool to the model instead of failing the turn', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([calls({ id: 'x', name: 'does_not_exist', args: {} })], reply('sorry'));
+        ctx.llm.script.push([toolCalls({ id: 'x', name: 'does_not_exist', args: {} })], reply('sorry'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
         expect(types(frames)).toEqual(['session', 'text', 'reply', 'done']);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+        expect(toolMessagesOf(1)[0].content).toEqual({
           error: 'unknown tool: does_not_exist',
         });
       });
@@ -838,15 +874,15 @@ describe('chat integration', () => {
       it('reports invalid arguments to the model and does not ask for confirmation', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push(
-          [calls({ id: 'x', name: 'create_financial_transaction', args: { amount: -5, unexpected: true } })],
+        ctx.llm.script.push(
+          [toolCalls({ id: 'x', name: 'create_financial_transaction', args: { amount: -5, unexpected: true } })],
           reply('sorry'),
         );
 
         const frames = await stream(user.id, { characterId: character.id });
 
         expect(types(frames)).toEqual(['session', 'text', 'reply', 'done']);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toMatchObject({
+        expect(toolMessagesOf(1)[0].content).toMatchObject({
           error: 'invalid arguments',
         });
       });
@@ -856,8 +892,8 @@ describe('chat integration', () => {
       const proposeTransaction = async (accountId: string) => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push(
-          [calls({ id: 'w1', name: 'create_financial_transaction', args: { accountId, amount: 50000, type: 'EXPENSE', note: 'lunch' } })],
+        ctx.llm.script.push(
+          [toolCalls({ id: 'w1', name: 'create_financial_transaction', args: { accountId, amount: 50000, type: 'EXPENSE', note: 'lunch' } })],
           reply('Please confirm'),
         );
         const frames = await stream(user.id, { characterId: character.id });
@@ -875,7 +911,7 @@ describe('chat integration', () => {
         expect(typeof confirmation.actionId).toBe('string');
         expect(await ctx.prisma.transaction.count()).toBe(0);
         expect(Number((await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id: account.id } })).cachedBalance)).toBe(1000000);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+        expect(toolMessagesOf(1)[0].content).toEqual({
           status: 'awaiting_user_confirmation',
         });
       });
@@ -955,19 +991,19 @@ describe('chat integration', () => {
     });
 
     describe('tool round limit', () => {
-      const readRound = () => [calls({ name: 'get_financial_summary', args: {} })];
+      const readRound = () => [toolCalls({ name: 'get_financial_summary', args: {} })];
 
       it('stops after 5 tool rounds with an error frame and stores no model message', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        for (let i = 0; i < 6; i++) ctx.genAi.script.push(readRound());
+        for (let i = 0; i < 6; i++) ctx.llm.script.push(readRound());
 
         const frames = await stream(user.id, { characterId: character.id });
 
         expect(frames.at(-1)).toMatchObject({ type: 'error' });
         expect(frames.at(-1)!.message).toContain('5');
         expect(types(frames)).not.toContain('done');
-        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledTimes(6);
+        expect(ctx.llm.sendMessageLLM).toHaveBeenCalledTimes(6);
         const stored = await messagesOf(frames[0].sessionId);
         expect(stored.map((m) => m.role)).toEqual(['USER']);
       });
@@ -975,8 +1011,8 @@ describe('chat integration', () => {
       it('allows exactly 5 tool rounds followed by an answer', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        for (let i = 0; i < 5; i++) ctx.genAi.script.push(readRound());
-        ctx.genAi.script.push(reply('finally'));
+        for (let i = 0; i < 5; i++) ctx.llm.script.push(readRound());
+        ctx.llm.script.push(reply('finally'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -992,7 +1028,7 @@ describe('chat integration', () => {
       it('emits an error frame, keeps the user message and stores no model message', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.sendMessageStream.mockRejectedValueOnce(httpError(500));
+        ctx.llm.script.push([httpError(500)]);
 
         const frames = await stream(user.id, { characterId: character.id, message: 'are you there' });
 
@@ -1005,12 +1041,7 @@ describe('chat integration', () => {
       it('does not store a half answer when the stream breaks after some text', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.sendMessageStream.mockImplementationOnce(async () =>
-          (async function* () {
-            yield text('{"message_vi":"partial ');
-            throw new Error('stream broke');
-          })(),
-        );
+        ctx.llm.script.push([text('{"message_vi":"partial '), new Error('stream broke')]);
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -1025,14 +1056,14 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         let seenAtModelCall: string[] = [];
-        ctx.genAi.sendMessageStream.mockImplementationOnce(async () => {
-          seenAtModelCall = (await ctx.prisma.chatMessage.findMany()).map((m) => `${m.role}:${m.content}`);
-          return (async function* () {
+        ctx.llm.sendMessageLLM.mockImplementationOnce(() =>
+          (async function* () {
+            seenAtModelCall = (await ctx.prisma.chatMessage.findMany()).map((m) => `${m.role}:${m.content}`);
             yield text(replyJson('answer', 'jp'));
             // still no model message while the stream is open
             seenAtModelCall.push(`open:${await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } })}`);
-          })();
-        });
+          })(),
+        );
 
         await stream(user.id, { characterId: character.id, message: 'question' });
 
@@ -1045,9 +1076,9 @@ describe('chat integration', () => {
       it('creates CHAT memories and links only the first one to the user message', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push(
+        ctx.llm.script.push(
           [
-            calls(
+            toolCalls(
               { id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea', category: 'PREFERENCE' } },
               { id: 'm2', name: 'save_user_memory', args: { content: 'user has a dog' } },
             ),
@@ -1070,7 +1101,7 @@ describe('chat integration', () => {
       it('does not link anything when the memory could not be saved', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([calls({ id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea' } })], reply('hmm'));
+        ctx.llm.script.push([toolCalls({ id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea' } })], reply('hmm'));
         // pre-turn retrieval uses the first embedding call, the tool uses the second
         ctx.genAi.embedContent.mockImplementationOnce(async () => ({ embeddings: [{ values: Array.from({ length: 1536 }, () => 0) }] }));
         ctx.genAi.embedContent.mockRejectedValueOnce(new Error('embedding down'));
@@ -1078,7 +1109,7 @@ describe('chat integration', () => {
         const frames = await stream(user.id, { characterId: character.id });
 
         expect(types(frames)).toEqual(['session', 'tool_call', 'text', 'reply', 'done']);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+        expect(toolMessagesOf(1)[0].content).toEqual({
           error: 'embedding down',
         });
         expect(await ctx.prisma.aiMemory.count()).toBe(0);
@@ -1091,12 +1122,7 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         const run = vi.spyOn(agent as any, 'runChat');
-        ctx.genAi.sendMessageStream.mockImplementationOnce(async () =>
-          (async function* () {
-            yield text('first chunk');
-            yield text('second chunk');
-          })(),
-        );
+        ctx.llm.script.push([text('first chunk'), text('second chunk')]);
         const observable = await agent.chatStream(user.id, { message: 'hi', characterId: character.id } as ChatStreamDto);
         const received: any[] = [];
 

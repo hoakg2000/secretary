@@ -15,6 +15,7 @@ import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter'
 import { validate } from './config/env.validation';
 import { EmailModule } from './email/email.module';
 import { FinanceModule } from './finance/finance.module';
+import { LlmModule } from './llm/llm.module';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ProactiveModule } from './proactive/proactive.module';
 
@@ -41,6 +42,7 @@ import { ProactiveModule } from './proactive/proactive.module';
     }),
     PrismaModule,
     AuthModule,
+    LlmModule,
     CharacterModule,
     EmailModule,
     FinanceModule,

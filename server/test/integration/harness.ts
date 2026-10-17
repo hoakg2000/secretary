@@ -5,18 +5,21 @@ import { Queue, QueueEvents } from 'bullmq';
 import { GenAiProvider } from '../../src/ai-agent/genai.provider';
 import { AgentService } from '../../src/ai-agent/services/agent/agent.service';
 import { AppModule } from '../../src/app.module';
+import { LlmService } from '../../src/llm/llm.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { EmailProcessor } from '../../src/email/email.processor';
 import { createConfigOverride } from './support/config';
 import { createFakeGenAi } from './support/genai';
+import { createFakeLlm } from './support/llm';
 import { createGoogleSpies } from './support/google';
 import { createFetchStub } from './support/http';
 
 export * from './support/errors';
 export * from './support/genai';
+export * from './support/llm';
 export * from './support/seed';
 export * from './support/wait';
-export { jsonResponse } from './support/http';
+export { jsonResponse, sseResponse } from './support/http';
 export { googleError } from './support/google';
 
 /** Every BullMQ key of the suite lives under this prefix, so a dev worker on the same Redis never sees it */
@@ -32,6 +35,7 @@ const BULL_SHARED_CONFIG_TOKEN = 'BULLMQ_CONFIG(default)';
  */
 export async function createTestModule() {
   const genAi = createFakeGenAi();
+  const llm = createFakeLlm();
   const http = createFetchStub();
   const google = createGoogleSpies();
 
@@ -52,6 +56,8 @@ export async function createTestModule() {
       .setLogger({ log: () => undefined, error: () => undefined, warn: () => undefined })
       .overrideProvider(GenAiProvider)
       .useValue(genAi)
+      .overrideProvider(LlmService)
+      .useValue(llm)
       .overrideProvider(BULL_SHARED_CONFIG_TOKEN)
       .useValue({ connection, prefix: TEST_QUEUE_PREFIX })
       .compile();
@@ -78,6 +84,7 @@ export async function createTestModule() {
       queue,
       queueEvents: events,
       genAi,
+      llm,
       http,
       google,
       config,
@@ -132,6 +139,7 @@ export async function resetState(ctx: TestContext) {
   await resetDb(ctx.prisma);
   await ctx.queue.obliterate({ force: true });
   ctx.genAi.reset();
+  ctx.llm.reset();
   ctx.http.reset();
   ctx.config.restore();
   ctx.google.reset();

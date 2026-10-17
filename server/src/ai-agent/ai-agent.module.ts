@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { AiAgentController } from './ai-agent.controller';
-import { GenAiProvider } from './genai.provider';
 import { AgentService } from './services/agent/agent.service';
 import { PendingActionStore } from './services/agent/pending-action.store';
 import { ChatSessionService } from './services/chat/chat-session.service';
@@ -14,7 +13,6 @@ import { MemoryTools } from './tools/memory.tools';
   imports: [DiscoveryModule],
   controllers: [AiAgentController],
   providers: [
-    GenAiProvider,
     MemoryService,
     MemoryTools,
     RagChunkService,
@@ -24,7 +22,6 @@ import { MemoryTools } from './tools/memory.tools';
     TtsService,
   ],
   exports: [
-    GenAiProvider,
     MemoryService,
     MemoryTools,
     RagChunkService,

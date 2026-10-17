@@ -1,11 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ChatRole, Prisma } from '@prisma/client';
+import { LlmMessage } from '../../../llm/llm.types';
 import { PrismaService } from '../../../prisma/prisma.service';
-
-export interface ChatHistoryTurn {
-  role: 'user' | 'model';
-  parts: { text: string }[];
-}
 
 /**
  * Phiên chat và tin nhắn (D19): chỉ bảng quan hệ, không bao giờ embedding / vector.
@@ -59,12 +55,12 @@ export class ChatSessionService {
     return message;
   }
 
-  /** Các tin nhắn gần nhất trước một tin nhắn, cũ trước, theo định dạng history của Gemini */
+  /** Các tin nhắn gần nhất trước một tin nhắn, cũ trước, dạng LlmMessage trung lập */
   async recentHistory(
     sessionId: string,
     beforeMessageId: string,
     limit = 20,
-  ): Promise<ChatHistoryTurn[]> {
+  ): Promise<LlmMessage[]> {
     const rows = await this.prisma.chatMessage.findMany({
       where: { sessionId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -76,12 +72,12 @@ export class ChatSessionService {
     const turns = rows
       .reverse()
       .filter((row) => row.content)
-      .map((row): ChatHistoryTurn => ({
-        role: row.role === ChatRole.USER ? 'user' : 'model',
-        parts: [{ text: row.content }],
+      .map((row): LlmMessage => ({
+        role: row.role === ChatRole.USER ? 'user' : 'assistant',
+        content: row.content,
       }));
 
-    // History của Gemini phải bắt đầu bằng lượt của người dùng
+    // History phải bắt đầu bằng lượt của người dùng
     const firstUser = turns.findIndex((turn) => turn.role === 'user');
     return firstUser === -1 ? [] : turns.slice(firstUser);
   }

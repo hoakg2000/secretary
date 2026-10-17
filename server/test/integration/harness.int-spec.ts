@@ -54,7 +54,7 @@ describe('integration harness', () => {
 
     it('gives the real worker the test prefix', async () => {
       const emailService = ctx.moduleRef.get(EmailService);
-      ctx.genAi.generateContent.mockResolvedValue(classification({ category: 'OTHER', summary: 's' }));
+      ctx.llm.answerAll(classification({ category: 'OTHER', summary: 's' }));
       const result = await emailService.ingest({ messageId: '<prefix@test>', sender: 'a@b.c', subject: 'x' });
       await waitForJob(ctx, result!.jobId!);
 
@@ -66,9 +66,7 @@ describe('integration harness', () => {
 
   describe('real email ingest through the real queue and worker', () => {
     it('puts a job under the prefix and the worker moves the log to PROCESSED', async () => {
-      ctx.genAi.generateContent.mockResolvedValueOnce(
-        classification({ category: 'OTHER', summary: 'Quảng cáo' }),
-      );
+      ctx.llm.script.push(classification({ category: 'OTHER', summary: 'Quảng cáo' }));
 
       const result = await ctx.moduleRef.get(EmailService).ingest({
         messageId: '<smoke@test>',
@@ -85,7 +83,7 @@ describe('integration harness', () => {
 
       const log = await waitForStatus(ctx.prisma, result!.emailLogId, EmailStatus.PROCESSED);
       expect(log.aiSummary).toBe('Quảng cáo');
-      expect(ctx.genAi.generateContent).toHaveBeenCalledTimes(1);
+      expect(ctx.llm.sendMessageLLM).toHaveBeenCalledTimes(1);
     });
   });
 

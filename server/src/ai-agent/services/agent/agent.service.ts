@@ -1,4 +1,3 @@
-import { FunctionCall, FunctionDeclaration, Part, Type } from '@google/genai';
 import {
   BadRequestException,
   Injectable,
@@ -17,9 +16,14 @@ import {
   AiToolOptions,
 } from '../../../common/decorators/ai-tool.decorator';
 import { buildCharacterPrompt } from '../../../character/character-prompt';
+import {
+  LLM_TYPE,
+  LlmService,
+  stripJsonFence,
+} from '../../../llm/llm.service';
+import { LlmMessage, LlmTool, LlmToolCall } from '../../../llm/llm.types';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatStreamDto } from '../../dto/chat-stream.dto';
-import { GenAiProvider } from '../../genai.provider';
 import { ChatSessionService } from '../chat/chat-session.service';
 import { MemoryService } from '../memory/memory.service';
 import defaultPrompt from '../../prompts/data.json';
@@ -27,7 +31,7 @@ import { PendingActionStore } from './pending-action.store';
 import { ReplyStreamParser } from './reply-stream.parser';
 
 interface DiscoveredTool {
-  definition: FunctionDeclaration;
+  definition: LlmTool;
   options: AiToolOptions;
   instance: any;
   methodName: string;
@@ -47,8 +51,6 @@ interface ChatTurn {
 
 /** Số vòng gọi tool tối đa cho một tin nhắn của người dùng */
 export const MAX_TOOL_ROUNDS = 5;
-
-export const CHAT_MODEL = 'gemini-3.6-flash';
 
 /** Schema câu trả lời của model: bản tiếng Việt hiển thị + bản tiếng Nhật để đọc TTS */
 export const REPLY_SCHEMA = {
@@ -78,7 +80,7 @@ export class AgentService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-    private readonly genAi: GenAiProvider,
+    private readonly llm: LlmService,
     private readonly memoryService: MemoryService,
     private readonly pendingActions: PendingActionStore,
     private readonly chatSessions: ChatSessionService,
@@ -118,7 +120,7 @@ export class AgentService implements OnModuleInit {
           if (metadata.parameters) {
             for (const [key, param] of Object.entries(metadata.parameters)) {
               properties[key] = {
-                type: param.type.toUpperCase() as Type,
+                type: param.type,
                 description: param.description,
                 enum: param.enum,
               };
@@ -128,18 +130,14 @@ export class AgentService implements OnModuleInit {
             }
           }
 
-          const functionDeclaration: FunctionDeclaration = {
+          const definition: LlmTool = {
             name: metadata.name,
             description: metadata.description,
-            parameters: {
-              type: Type.OBJECT,
-              properties,
-              required,
-            },
+            parameters: { type: 'object', properties, required },
           };
 
           this.toolsMap.set(metadata.name, {
-            definition: functionDeclaration,
+            definition,
             options: metadata,
             instance,
             methodName,
@@ -299,44 +297,34 @@ export class AgentService implements OnModuleInit {
       memoryLinked: false,
     };
 
-    const functionDeclarations = Array.from(this.toolsMap.values()).map(
-      (t) => t.definition,
-    );
-
-    const chat = this.genAi.get().chats.create({
-      model: CHAT_MODEL,
-      config: {
-        systemInstruction: await this.buildSystemInstruction(dto, character),
-        tools:
-          functionDeclarations.length > 0
-            ? [{ functionDeclarations }]
-            : undefined,
-        responseMimeType: 'application/json',
-        responseJsonSchema: REPLY_SCHEMA,
-      },
-      history: await this.chatSessions.recentHistory(sessionId, userMessage.id),
-    });
-
-    let message: string | Part[] = dto.message;
+    const tools = Array.from(this.toolsMap.values()).map((t) => t.definition);
+    const system = await this.buildSystemInstruction(dto, character);
+    const messages: LlmMessage[] = [
+      ...(await this.chatSessions.recentHistory(sessionId, userMessage.id)),
+      { role: 'user', content: dto.message },
+    ];
 
     // Vòng lặp ReAct / Tool Calling, có giới hạn số vòng
     for (let round = 0; ; round++) {
-      const calls: FunctionCall[] = [];
+      let calls: LlmToolCall[] = [];
+      let rawParts: unknown;
       const parser = new ReplyStreamParser();
       let raw = '';
       let streamedVi = '';
 
-      const stream = await chat.sendMessageStream({ message });
-      for await (const chunk of stream) {
+      for await (const ev of this.llm.sendMessageLLM(LLM_TYPE, {
+        system,
+        messages,
+        tools: tools.length > 0 ? tools : undefined,
+        jsonSchema: REPLY_SCHEMA,
+      })) {
         if (isCancelled()) return;
-        if (chunk.functionCalls) calls.push(...chunk.functionCalls);
-        // Lấy text từ parts (getter chunk.text cảnh báo khi chunk có functionCall)
-        const text = chunk.candidates?.[0]?.content?.parts
-          ?.map((part) => (part.thought ? '' : (part.text ?? '')))
-          .join('');
-        if (text) {
-          raw += text;
-          const vi = parser.feed(text);
+        if (ev.type === 'tool_calls') {
+          calls = ev.calls;
+          rawParts = ev.raw;
+        } else if (ev.type === 'text') {
+          raw += ev.text;
+          const vi = parser.feed(ev.text);
           if (vi) {
             streamedVi += vi;
             emit({ type: 'text', content: vi });
@@ -347,7 +335,7 @@ export class AgentService implements OnModuleInit {
       if (raw) {
         let reply: { message_vi?: unknown; message_jp?: unknown } | null = null;
         try {
-          reply = JSON.parse(raw);
+          reply = JSON.parse(stripJsonFence(raw));
         } catch (error: any) {
           this.logger.warn(
             `Câu trả lời của model không phải JSON hợp lệ: ${error.message}`,
@@ -372,19 +360,22 @@ export class AgentService implements OnModuleInit {
         );
       }
 
-      // Trả lời TẤT CẢ function call của lượt này trong MỘT message
-      const responses: Part[] = [];
+      messages.push({
+        role: 'assistant',
+        content: raw,
+        toolCalls: calls,
+        raw: rawParts,
+      });
+      // Trả lời TẤT CẢ tool call của lượt này trước khi gọi model lại
       for (const call of calls) {
         if (isCancelled()) return;
-        responses.push({
-          functionResponse: {
-            id: call.id,
-            name: call.name,
-            response: await this.executeToolCall(call, emit, turn),
-          },
+        messages.push({
+          role: 'tool',
+          toolCallId: call.id,
+          name: call.name,
+          content: await this.executeToolCall(call, emit, turn),
         });
       }
-      message = responses;
     }
 
     // Lượt lỗi hoặc bị client hủy không lưu câu trả lời dở dang
@@ -406,7 +397,7 @@ export class AgentService implements OnModuleInit {
    * Không bao giờ throw: tool lạ, tham số sai, tool lỗi đều được báo lại cho model.
    */
   private async executeToolCall(
-    call: FunctionCall,
+    call: LlmToolCall,
     emit: Emit,
     turn: ChatTurn,
   ): Promise<Record<string, unknown>> {
@@ -417,13 +408,13 @@ export class AgentService implements OnModuleInit {
       );
     };
 
-    const tool = call.name ? this.toolsMap.get(call.name) : undefined;
+    const tool = this.toolsMap.get(call.name);
     if (!tool) {
       record({ error: `unknown tool: ${call.name}` });
       return { error: `unknown tool: ${call.name}` };
     }
 
-    let args: object = call.args ?? {};
+    let args: object = call.args;
     if (tool.options.dto) {
       args = plainToInstance(tool.options.dto, args);
       const errors = await validate(args, {
@@ -441,7 +432,7 @@ export class AgentService implements OnModuleInit {
 
     // Tool ghi dữ liệu: không chạy, lưu lại chờ người dùng xác nhận qua API
     if (tool.options.requiresConfirmation) {
-      const action = this.pendingActions.add(call.name!, args);
+      const action = this.pendingActions.add(call.name, args);
       emit({
         type: 'confirmation_required',
         actionId: action.id,
