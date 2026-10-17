@@ -16,11 +16,9 @@ import {
 } from '@nestjs/swagger';
 import { CharacterService } from './character.service';
 import { CreateCharacterDto } from './dto/create-character.dto';
-import { CreatePersonaDto } from './dto/create-persona.dto';
 import { UpdateCharacterDto } from './dto/update-character.dto';
-import { UpdatePersonaDto } from './dto/update-persona.dto';
 
-@ApiTags('Characters & Personas')
+@ApiTags('Characters')
 @ApiBearerAuth('JWT-auth')
 @Controller('characters')
 export class CharacterController {
@@ -122,85 +120,6 @@ export class CharacterController {
     return {
       statusCode: HttpStatus.OK,
       message: 'Xóa Character thành công',
-      data,
-    };
-  }
-
-  // ==================== PERSONA ENDPOINTS ====================
-
-  @Post(':id/personas')
-  @ApiOperation({ summary: 'Thêm một Persona cho Character' })
-  @ApiResponse({
-    status: HttpStatus.CREATED,
-    description: 'Thêm Persona thành công.',
-  })
-  @ApiResponse({
-    status: HttpStatus.NOT_FOUND,
-    description: 'Không tìm thấy Character.',
-  })
-  async addPersona(
-    @Param('id') characterId: string,
-    @Body() createPersonaDto: CreatePersonaDto,
-  ) {
-    const data = await this.characterService.addPersona(
-      characterId,
-      createPersonaDto,
-    );
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Thêm Persona thành công',
-      data,
-    };
-  }
-
-  @Patch(':id/personas/:personaId')
-  @ApiOperation({ summary: 'Cập nhật nội dung Persona' })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'Cập nhật Persona thành công.',
-  })
-  @ApiResponse({
-    status: HttpStatus.NOT_FOUND,
-    description: 'Không tìm thấy Persona.',
-  })
-  async updatePersona(
-    @Param('id') characterId: string,
-    @Param('personaId') personaId: string,
-    @Body() updatePersonaDto: UpdatePersonaDto,
-  ) {
-    const data = await this.characterService.updatePersona(
-      characterId,
-      personaId,
-      updatePersonaDto,
-    );
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật Persona thành công',
-      data,
-    };
-  }
-
-  @Delete(':id/personas/:personaId')
-  @ApiOperation({ summary: 'Xóa Persona' })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'Xóa Persona thành công.',
-  })
-  @ApiResponse({
-    status: HttpStatus.NOT_FOUND,
-    description: 'Không tìm thấy Persona.',
-  })
-  async removePersona(
-    @Param('id') characterId: string,
-    @Param('personaId') personaId: string,
-  ) {
-    const data = await this.characterService.removePersona(
-      characterId,
-      personaId,
-    );
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa Persona thành công',
       data,
     };
   }

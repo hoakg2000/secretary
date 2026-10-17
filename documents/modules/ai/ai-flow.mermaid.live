@@ -20,7 +20,7 @@ flowchart TB
     end
 
     subgraph Database ["PostgreSQL"]
-        DbChar[("characters, personas")]
+        DbChar[("characters")]
         DbSession[("chat_sessions")]
         DbMessage[("chat_messages: full text, content_jp, no vector")]
         DbMemory[("ai_memories: vector 1536 + tsvector")]
@@ -34,10 +34,10 @@ flowchart TB
     Agent -- "4. store the user message in full" --> ChatSvc
     ChatSvc -- "insert role USER" --> DbMessage
     Agent -- "5. last 20 messages as history" --> ChatSvc
-    Agent -- "6. Persona, memory_rule of the session character" --> DbChar
+    Agent -- "6. system_prompt, memory_rule of the session character" --> DbChar
     Agent -- "7. Pre-turn retrieval, up to 5 memories" --> MemSvc
     MemSvc -- "vector + text search" --> DbMemory
-    Agent -- "8. Prompt (default + persona), history, tool declarations, JSON reply schema" --> Gemini
+    Agent -- "8. Prompt (default + character prompt), history, tool declarations, JSON reply schema" --> Gemini
     Gemini -- "9. JSON chunks {message_vi, message_jp} and function calls" --> Agent
 
     %% Tool loop

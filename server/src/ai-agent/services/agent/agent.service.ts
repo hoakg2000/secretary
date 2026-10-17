@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
-import { ChatRole, Prisma } from '@prisma/client';
+import { Character, ChatRole, Prisma } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { Observable } from 'rxjs';
@@ -16,6 +16,7 @@ import {
   AI_TOOL_METADATA_KEY,
   AiToolOptions,
 } from '../../../common/decorators/ai-tool.decorator';
+import { buildCharacterPrompt } from '../../../character/character-prompt';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatStreamDto } from '../../dto/chat-stream.dto';
 import { GenAiProvider } from '../../genai.provider';
@@ -34,10 +35,6 @@ interface DiscoveredTool {
 
 type ChatFrame = Record<string, unknown> & { type: string };
 type Emit = (frame: ChatFrame) => void;
-
-type ChatCharacter = Prisma.CharacterGetPayload<{
-  include: { personas: true };
-}>;
 
 /** Trạng thái của một lượt chat. ID tin nhắn nằm ở đây, không bao giờ lấy từ model */
 interface ChatTurn {
@@ -159,37 +156,23 @@ export class AgentService implements OnModuleInit {
    */
   private async loadCharacter(
     characterId?: string | null,
-  ): Promise<ChatCharacter | null> {
+  ): Promise<Character | null> {
     if (!characterId) return null;
     return this.prisma.character.findUnique({
       where: { id: characterId },
-      include: { personas: true },
     });
   }
 
   /**
-   * Persona của Character, bổ sung cho prompt mặc định; rỗng nếu không có
-   */
-  private getPersonaPrompt(character: ChatCharacter | null): string {
-    if (!character || character.personas.length === 0) return '';
-
-    const personaTexts = character.personas
-      .map((p) => `[${p.type}]: ${p.value}`)
-      .join('\n');
-
-    return `Tên nhân vật: ${character.name}\n${personaTexts}`;
-  }
-
-  /**
-   * System instruction = prompt mặc định + persona + thời gian hiện tại + quy tắc ghi nhớ + các ký ức liên quan tới tin nhắn
+   * System instruction = prompt mặc định + Nhân vật + thời gian hiện tại + quy tắc ghi nhớ + các ký ức liên quan tới tin nhắn
    */
   private async buildSystemInstruction(
     dto: ChatStreamDto,
-    character: ChatCharacter | null,
+    character: Character | null,
   ): Promise<string> {
     const sections = [defaultPrompt.systemPrompt];
-    const persona = this.getPersonaPrompt(character);
-    if (persona) sections.push(persona);
+    const characterPrompt = buildCharacterPrompt(character);
+    if (characterPrompt) sections.push(characterPrompt);
 
     const timeZone = this.configService.get<string>(
       'APP_TIMEZONE',
@@ -298,7 +281,7 @@ export class AgentService implements OnModuleInit {
   private async runChat(
     sessionId: string,
     dto: ChatStreamDto,
-    character: ChatCharacter | null,
+    character: Character | null,
     emit: Emit,
     isCancelled: () => boolean,
   ) {

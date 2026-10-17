@@ -5,6 +5,7 @@
     "resolvePackageJsonExports": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
+    "rewriteRelativeImportExtensions": true,
     "isolatedModules": true,
     "declaration": true,
     "removeComments": true,

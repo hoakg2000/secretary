@@ -24,7 +24,7 @@
 - `characterId` (`string`, UUID, optional in the DTO): the character to answer as. **Required when no `sessionId` is
   sent** (a new session): missing → 400, unknown → 404, both before the stream opens. A new session stores this
   character. With a `sessionId`, the session's stored character is used and `characterId` is ignored. When the stored
-  character was deleted (`character_id` null), the turn runs with the generic persona text.
+  character was deleted (`character_id` null), the turn runs with the default prompt only.
 
 There is no `history` field. The server reads the history from `chat_messages`.
 

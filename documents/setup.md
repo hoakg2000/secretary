@@ -23,7 +23,7 @@ All commands run from `server/`. Needs Node 24 or newer (`engines` in `package.j
    ```
    npx prisma migrate deploy
    ```
-5. Create the master user (safe to repeat; it updates the password):
+5. Load the characters from `documents/characters/*.json`, then create the master user (safe to repeat; it updates the password):
    ```
    npm run seed
    ```
@@ -33,6 +33,10 @@ All commands run from `server/`. Needs Node 24 or newer (`engines` in `package.j
    ```
    API under `http://localhost:3000/api/v1`, Swagger at `http://localhost:3000/api/docs`.
 7. Log in: `POST /api/v1/auth/login` with the seeded email and password.
+
+## Add a character
+
+Drop a JSON file in `documents/characters/` (format: `modules/character/character.service.md`, section "Character JSON") and run `npm run seed` again. The seed upserts by `slug`. The JSON is the source of truth: re-seeding overwrites changes made through the API to a seeded character. All files are validated before anything is written (types, duplicate slugs), so one broken file writes nothing; the error names the file.
 
 ## Connect Google (optional)
 

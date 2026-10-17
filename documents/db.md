@@ -7,14 +7,14 @@ Postgres with the `pgvector` extension. Every table name below is the `@@map` na
 
 | 1. Auth, character | 2. Email, queue | 3. Finance, calendar | 4. AI memory | 5. Chat |
 |---|---|---|---|---|
-| `users`<br>`user_sessions`<br>`refresh_tokens`<br>`characters`<br>`personas` | `email_logs`<br>`email_rules`<br>`queue_jobs` (unused) | `bank_accounts`<br>`transactions`<br>`categories`<br>`local_calendars`<br>`calendar_sync_states` | `ai_memories`<br>`rag_chunks` (unused) | `chat_sessions`<br>`chat_messages` |
+| `users`<br>`user_sessions`<br>`refresh_tokens`<br>`characters` | `email_logs`<br>`email_rules`<br>`queue_jobs` (unused) | `bank_accounts`<br>`transactions`<br>`categories`<br>`local_calendars`<br>`calendar_sync_states` | `ai_memories`<br>`rag_chunks` (unused) | `chat_sessions`<br>`chat_messages` |
 
 All primary keys are `id` (UUID string). `created_at` defaults to now; `updated_at` is maintained by Prisma where
 listed. Stored times are UTC.
 
 ---
 
-## 1. Auth, character and persona
+## 1. Auth and character
 
 ### `users`
 
@@ -61,16 +61,9 @@ This is the **login** session. It is unrelated to a chat session (section 5).
 | `name` | text | |
 | `voice_id` | text, null | Fish.audio voice. |
 | `source` | text, null | Origin of the character. |
+| `slug` | text, null, unique `characters_slug_key` | Seed key of `documents/characters/<file>.json`. Null for characters created through the API; not writable through the API. |
+| `system_prompt` | text, null | The character's prompt (identity, tone, background, rules; max 20000 characters through `systemPrompt` on create / update). Appended to the default prompt at every chat turn; blank = nothing added. |
 | `memory_rule` | text, null | The rule that tells the AI which chat messages are important enough to become a memory (max 2000 characters, set through `memoryRule` on create / update). Null = built-in default rule in `AgentService`. |
-| `created_at`, `updated_at` | timestamp | |
-
-### `personas`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `character_id` | FK `characters.id`, cascade | |
-| `type` | enum `PersonaType` | `SYSTEM_PROMPT`, `TONE`, `IDENTITY`, `KNOWLEDGE_BACKGROUND`, `RELATIONSHIP_DYNAMICS`, `OTHER`. |
-| `value` | text | Prompt text. All personas of the character are joined into the chat system instruction. |
 | `created_at`, `updated_at` | timestamp | |
 
 ---
@@ -219,7 +212,7 @@ Index: `(session_id, created_at)`.
 
 Deleting a session deletes its messages. Memories made from them stay: the foreign key is on the message side.
 
-Migrations: `20261013130000_chat_sessions_messages`; `20261017120000_add_chat_message_content_jp` (adds `content_jp`).
+Migrations: `20261013130000_chat_sessions_messages`; `20261017120000_add_chat_message_content_jp` (adds `content_jp`); `20261017130000_character_system_prompt` (adds `characters.slug` and `characters.system_prompt`; drops the old per-type prompt table and its enum; its text was folded into `system_prompt` as `[TYPE]: value` lines).
 
 ---
 

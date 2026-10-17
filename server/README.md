@@ -13,7 +13,7 @@ docker compose up -d
 npm install
 cp .env.example .env      # then fill it in
 npx prisma migrate deploy
-npm run seed
+npm run seed              # characters from documents/characters + master user
 npm run start:dev
 ```
 

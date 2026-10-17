@@ -5,6 +5,7 @@ import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
 import prompt from '../../src/ai-agent/prompts/data.json';
 import { ReplyStreamParser } from '../../src/ai-agent/services/agent/reply-stream.parser';
 import { AgentService, CHAT_MODEL, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
+import { buildCharacterPrompt } from '../../src/character/character-prompt';
 import { ChatSessionService } from '../../src/ai-agent/services/chat/chat-session.service';
 import { MemoryService } from '../../src/ai-agent/services/memory/memory.service';
 import {
@@ -398,7 +399,8 @@ describe('chat integration', () => {
         data: {
           name: 'Mika',
           voiceId: 'v1',
-          personas: { create: [{ type: 'TONE', value: 'playful and warm' }, { type: 'IDENTITY', value: 'a cat girl' }] },
+          source: 'Blue Archive',
+          systemPrompt: 'Speak playfully and warmly. You are a cat girl.',
           ...data,
         },
       });
@@ -520,21 +522,21 @@ describe('chat integration', () => {
     });
 
     describe('system instruction', () => {
-      it('contains the character name, its personas and the custom memory rule', async () => {
+      it('contains the character block (name, source, systemPrompt) and the custom memory rule', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter({ memoryRule: 'Only remember birthdays.' });
 
         await stream(user.id, { characterId: character.id });
 
         const instruction = instructionOf();
-        expect(instruction).toContain('Tên nhân vật: Mika');
-        expect(instruction).toContain('[TONE]: playful and warm');
-        expect(instruction).toContain('[IDENTITY]: a cat girl');
+        expect(instruction).toContain('## Nhân vật bạn đang nhập vai');
+        expect(instruction).toContain('Tên: Mika (Nguồn: Blue Archive)');
+        expect(instruction).toContain('Speak playfully and warmly. You are a cat girl.');
         expect(instruction).toContain('Only remember birthdays.');
         expect(instruction).not.toContain(DEFAULT_MEMORY_RULE);
       });
 
-      it('starts with the default system prompt and puts the persona text after it', async () => {
+      it('starts with the default system prompt and puts the character block after it', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
 
@@ -542,7 +544,9 @@ describe('chat integration', () => {
 
         const instruction = instructionOf();
         expect(instruction.startsWith(prompt.systemPrompt)).toBe(true);
-        expect(instruction.indexOf('Tên nhân vật: Mika')).toBeGreaterThanOrEqual(prompt.systemPrompt.length);
+        expect(instruction.indexOf('## Nhân vật bạn đang nhập vai')).toBeGreaterThanOrEqual(prompt.systemPrompt.length);
+        expect(instruction.indexOf('Tên: Mika')).toBeGreaterThan(instruction.indexOf('## Nhân vật bạn đang nhập vai'));
+        expect(instruction.indexOf('Speak playfully')).toBeGreaterThan(instruction.indexOf('Tên: Mika'));
       });
 
       it('uses the default memory rule when the character has none', async () => {
@@ -554,14 +558,15 @@ describe('chat integration', () => {
         expect(instructionOf()).toContain(DEFAULT_MEMORY_RULE);
       });
 
-      it('uses the generic prompt for a character without personas', async () => {
+      it('adds no character block for a character without systemPrompt', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await seedCharacter(ctx.prisma, { name: 'Bare' });
 
         await stream(user.id, { characterId: character.id });
 
         expect(instructionOf().startsWith(prompt.systemPrompt)).toBe(true);
-        expect(instructionOf()).not.toContain('Tên nhân vật');
+        expect(instructionOf()).not.toContain('## Nhân vật bạn đang nhập vai');
+        expect(instructionOf()).not.toContain('Bare');
       });
 
       it('falls back to the generic prompt and the default rule when the session character was deleted', async () => {
@@ -1135,5 +1140,27 @@ describe('ReplyStreamParser', () => {
 
   it('emits nothing for JSON without message_vi', () => {
     expect(feedAll('{"other":"x"}', 2)).toBe('');
+  });
+});
+
+describe('buildCharacterPrompt', () => {
+  it('renders heading, name, source and systemPrompt', () => {
+    expect(buildCharacterPrompt({ name: 'Mari', source: 'Blue Archive', systemPrompt: 'Be gentle.' })).toBe(
+      '## Nhân vật bạn đang nhập vai\nTên: Mari (Nguồn: Blue Archive)\nBe gentle.',
+    );
+  });
+
+  it('shows the source only when it is set', () => {
+    const text = buildCharacterPrompt({ name: 'Mari', source: null, systemPrompt: 'Be gentle.' });
+
+    expect(text).toBe('## Nhân vật bạn đang nhập vai\nTên: Mari\nBe gentle.');
+  });
+
+  it.each([null, '', '   \n'])('returns an empty string for systemPrompt %j', (systemPrompt) => {
+    expect(buildCharacterPrompt({ name: 'Mari', source: 'X', systemPrompt })).toBe('');
+  });
+
+  it('returns an empty string without a character', () => {
+    expect(buildCharacterPrompt(null)).toBe('');
   });
 });

@@ -9,7 +9,7 @@ datasource db {
 }
 
 // ==========================================
-// 1. CORE AUTH, CHARACTER & PERSONA SCHEMA
+// 1. CORE AUTH & CHARACTER SCHEMA
 // ==========================================
 
 model User {
@@ -66,40 +66,19 @@ model RefreshToken {
 }
 
 model Character {
-  id         String   @id @default(uuid())
-  name       String
-  voiceId    String?  @map("voice_id")
-  source     String?
-  memoryRule String?  @map("memory_rule") @db.Text // D20: importance rule; null = built-in default
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  id           String   @id @default(uuid())
+  name         String
+  voiceId      String?  @map("voice_id")
+  source       String?
+  memoryRule   String?  @map("memory_rule") @db.Text // D20: importance rule; null = built-in default
+  slug         String?  @unique // seed key; null for API-created characters
+  systemPrompt String?  @map("system_prompt") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  personas     Persona[]
   chatSessions ChatSession[]
 
   @@map("characters")
-}
-
-enum PersonaType {
-  SYSTEM_PROMPT
-  TONE
-  IDENTITY
-  KNOWLEDGE_BACKGROUND
-  RELATIONSHIP_DYNAMICS
-  OTHER
-}
-
-model Persona {
-  id          String      @id @default(uuid())
-  characterId String      @map("character_id")
-  type        PersonaType
-  value       String      @db.Text
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
-
-  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
-
-  @@map("personas")
 }
 
 // ==========================================

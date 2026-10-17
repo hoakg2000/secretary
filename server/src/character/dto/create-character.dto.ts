@@ -28,4 +28,13 @@ export class CreateCharacterDto {
   @MaxLength(2000) // nằm trong system prompt của mọi lượt chat
   @IsOptional()
   memoryRule?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'System prompt của nhân vật (tính cách, giọng điệu, bối cảnh...), được thêm vào prompt mặc định ở mỗi lượt chat',
+  })
+  @IsString()
+  @MaxLength(20000)
+  @IsOptional()
+  systemPrompt?: string;
 }

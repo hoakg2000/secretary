@@ -16,7 +16,7 @@
 | `RagChunkService` | `services/rag-chunk/rag-chunk.service.ts` | Text chunking. Kept, called from nowhere. |
 | `ChatSessionService` | `services/chat/chat-session.service.ts` | Chat sessions and messages. |
 
-**Tables**: `characters` (incl. `memory_rule`, `voice_id`), `personas` (read), `ai_memories` (read, write), `chat_sessions`,
+**Tables**: `characters` (incl. `system_prompt`, `memory_rule`, `voice_id`; read), `ai_memories` (read, write), `chat_sessions`,
 `chat_messages` (read, write). `rag_chunks` is written only by the unused
 `RagChunkService`.
 
@@ -55,7 +55,7 @@ confirm it.
 
 Before the stream opens: `ChatSessionService.resolve` loads the session of `dto.sessionId` (404 for an unknown or
 foreign one; the model is not called). An existing session uses its stored `character_id` and ignores
-`dto.characterId`; when that is null (character deleted), no persona section is added and only the default prompt from `prompts/data.json` applies. A new session needs
+`dto.characterId`; when that is null (character deleted), no character block is added and only the default prompt from `prompts/data.json` applies. A new session needs
 `dto.characterId`: missing → `BadRequestException`, unknown → `NotFoundException`; then the session is created with
 that character. The `character_id` of a session is never changed. These errors are thrown before the stream opens.
 Then, inside the stream:
@@ -65,7 +65,7 @@ Then, inside the stream:
    full**, before the model is called.
 3. Build the system instruction (`buildSystemInstruction`):
    - the default prompt, `prompts/data.json` (`systemPrompt`), always first;
-   - persona of the character (`characters`, `personas`), which extends the default prompt;
+   - the character block from `buildCharacterPrompt` (`server/src/character/character-prompt.ts`): the heading `## Nhân vật bạn đang nhập vai`, then the name, the source (when set) and `characters.system_prompt`. It extends the default prompt and is omitted when `system_prompt` is blank or there is no character;
    - current time and `APP_TIMEZONE`;
    - the note that write tools are not run until the user confirms;
    - the importance rule: `characters.memory_rule`, or `DEFAULT_MEMORY_RULE` when it is null, with "call
@@ -88,7 +88,7 @@ Then, inside the stream:
    If the model reply is not valid JSON (or has no `message_vi`), the streamed text, or the raw text when nothing
    was streamed, is stored as `content` and `content_jp` stays null; `contentJp` in the `reply` frame is `null`.
 
-**Tables**: `characters`, `personas` (read); `chat_sessions`, `chat_messages` (read, write); `ai_memories` (read;
+**Tables**: `characters` (read); `chat_sessions`, `chat_messages` (read, write); `ai_memories` (read;
 write only when the model calls `save_user_memory`).
 
 Rules:

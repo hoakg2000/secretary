@@ -1,11 +1,12 @@
-// Creates or updates the master user from MASTER_EMAIL / MASTER_PASSWORD.
-// Run with `npm run seed`. Executed by Node's type stripping: keep this file free of
-// enums, decorators and parameter properties.
+// Loads the characters from documents/characters, then creates or updates the master user
+// from MASTER_EMAIL / MASTER_PASSWORD. Run with `npm run seed`.
+// Executed by Node's type stripping: keep this file free of enums, decorators and parameter properties.
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import pg from 'pg';
+import { seedCharacters } from './seed-characters.ts';
 
 async function main() {
   const email = process.env.MASTER_EMAIL;
@@ -20,6 +21,8 @@ async function main() {
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
   try {
+    await seedCharacters(prisma);
+
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.upsert({
       where: { email },

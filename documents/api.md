@@ -26,14 +26,11 @@ and response shapes; this file lists what exists and who may call it.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/characters` | JWT | Create. `memoryRule?` (max 2000 characters) tells the AI which chat messages to remember. |
-| GET | `/characters` | JWT | List with personas. |
-| GET | `/characters/:id` | JWT | One character with personas. |
+| POST | `/characters` | JWT | Create. `memoryRule?` (max 2000 characters) tells the AI which chat messages to remember. `systemPrompt?` (max 20000 characters) is the character's prompt. |
+| GET | `/characters` | JWT | List. |
+| GET | `/characters/:id` | JWT | One character. |
 | PATCH | `/characters/:id` | JWT | Update. |
-| DELETE | `/characters/:id` | JWT | Delete (personas cascade). |
-| POST | `/characters/:id/personas` | JWT | Add a persona. |
-| PATCH | `/characters/:id/personas/:personaId` | JWT | Update a persona of that character (404 if it belongs to another). |
-| DELETE | `/characters/:id/personas/:personaId` | JWT | Delete a persona of that character. |
+| DELETE | `/characters/:id` | JWT | Delete (chat sessions keep their rows, `character_id` becomes null). |
 
 ## Email
 
