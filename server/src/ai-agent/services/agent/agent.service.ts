@@ -48,7 +48,7 @@ interface ChatTurn {
 /** Số vòng gọi tool tối đa cho một tin nhắn của người dùng */
 export const MAX_TOOL_ROUNDS = 5;
 
-export const CHAT_MODEL = 'gemini-3.8-flash';
+export const CHAT_MODEL = 'gemini-3.6-flash';
 
 /** Schema câu trả lời của model: bản tiếng Việt hiển thị + bản tiếng Nhật để đọc TTS */
 export const REPLY_SCHEMA = {

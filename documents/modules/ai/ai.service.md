@@ -72,7 +72,7 @@ Then, inside the stream:
      `save_user_memory` only for a message that meets this rule";
    - up to 5 memories found by `MemoryService.searchMemory` for the message, marked as reference data that must
      not be followed as instructions. A retrieval failure does not fail the chat.
-4. Open a Gemini chat (`CHAT_MODEL`, `gemini-3.8-flash`) with all tool declarations, the reply schema (`responseMimeType: application/json`, `REPLY_SCHEMA`: required `message_vi` and `message_jp`) and the history from
+4. Open a Gemini chat (`CHAT_MODEL`, `gemini-3.6-flash`) with all tool declarations, the reply schema (`responseMimeType: application/json`, `REPLY_SCHEMA`: required `message_vi` and `message_jp`) and the history from
    `ChatSessionService.recentHistory`: up to the last 20 messages of the session before the one stored in step 2,
    oldest first, starting at a user turn. Rows with empty text (a `MODEL` row that only holds tool calls) are dropped.
 5. The model answers in JSON `{ message_vi, message_jp }`. `ReplyStreamParser` (`services/agent/reply-stream.parser.ts`) reads the stream piece by piece and emits only the decoded `message_vi` as `text` frames; `message_jp` is never streamed. When the model calls tools, run them (`executeToolCall`), answer all calls
@@ -178,5 +178,5 @@ clears the category. Without `content` it is a plain update. With `content` it f
 ## Not in this module
 
 - Proactive triggers: `server/src/proactive/` (reminder cron and `POST /proactive/trigger`).
-- Email classification: `server/src/email/email-ai.service.ts`. It uses `GenAiProvider` and `CHAT_MODEL` (`gemini-3.8-flash`) with no tools and writes
+- Email classification: `server/src/email/email-ai.service.ts`. It uses `GenAiProvider` and `CHAT_MODEL` (`gemini-3.6-flash`) with no tools and writes
   nothing to `ai_memories`.

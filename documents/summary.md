@@ -44,7 +44,7 @@ in section 3.
 - **Character configuration**: one `system_prompt` text per character (identity, tone, background,
   rules), added to the default prompt. Characters are loaded from `documents/characters/*.json` by `npm run seed`. There can be many characters; the client chooses one. A new chat session requires a `characterId` and
   keeps it; an existing session uses its stored character.
-- **Bilingual reply**: the model answers in JSON with a Vietnamese text (shown, streamed) and a Japanese text (stored, read by TTS). Model: `gemini-3.8-flash`.
+- **Bilingual reply**: the model answers in JSON with a Vietnamese text (shown, streamed) and a Japanese text (stored, read by TTS). Model: `gemini-3.6-flash`.
 - **Chat sessions and message storage**: every session and the full text of every message are stored
   in `chat_sessions` / `chat_messages`. The server supplies the history of a turn. Chat is not embedded and not
   searched by vector.

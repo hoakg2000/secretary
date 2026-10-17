@@ -3,7 +3,7 @@ flowchart TB
     Client["Client"]
 
     subgraph External ["External services"]
-        Gemini["Google Gemini API: gemini-3.8-flash, gemini-embedding-001"]
+        Gemini["Google Gemini API: gemini-3.6-flash, gemini-embedding-001"]
         Fish["Fish.audio API"]
     end
 
