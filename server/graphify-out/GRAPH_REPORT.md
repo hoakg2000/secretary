@@ -1,75 +1,86 @@
 # Graph Report - server  (2026-10-17)
 
 ## Corpus Check
-- 134 files · ~54,054 words
+- 138 files · ~56,829 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 5 file(s) not represented in the graph (top: (none) 2, .example 1, .toml 1)
 
 ## Summary
-- 1052 nodes · 2455 edges · 35 communities (30 shown, 5 thin omitted)
+- 1074 nodes · 2482 edges · 46 communities (35 shown, 11 thin omitted)
 - Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 104 edges (avg confidence: 0.85)
-- Token cost: 0 input · 63,818 output
+- Token cost: 0 input · 52,820 output
 
 ## Community Hubs (Navigation)
-- Shared Library Imports
-- Integration Test Suite
-- Finance Ledger API
-- AI Agent Chat API
-- Local Calendar
-- Semantic Memory
-- Email Rules & Ingestion
-- Google Clients & Prisma
-- Character & Personas
-- Auth & Sessions
+- Google Clients & Test Harness
+- Finance DTOs & Ledger
+- Email Ingestion API
+- Google OAuth & Calendar Sync
+- Auth Controller & Sessions
+- Calendar API
 - Proactive Notifications
-- Runtime Dependencies
-- Core Dependency Set
+- Character API
 - Nest Module Wiring
-- Gemini & AI Tools
+- Server Docs & Local Infra
+- Package Metadata
+- Runtime Dependencies
+- Agent Service & Gemini
+- AI Agent Controller
+- AI DTOs & Chat Sessions
 - Dev Dependencies
-- Chat Sessions & TTS
+- Chat Stream & Prompt Build
 - TypeScript Config
+- Calendar DTOs & AI Tools
+- Memory Search DTO
 - npm Scripts
-- Email Worker Pipeline
-- App Bootstrap & Guards
-- JWT & Config Wiring
-- Server Docs & Rules
-- Local Infra & Test Gate
-- Env Validation
-- Pub/Sub Push DTOs
+- Email Rules
+- TTS & Chat Session Service
+- Email AI & Worker
+- Memory Save & RAG Chunks
+- Auth Module & JWT Guard
+- Finance DTO Files
+- Tool Calling & Confirmation
+- Database Seed Entry
+- Character Seed Loader
 - Root App Controller
-- Test Runner Setup
+- Create Transaction DTO
+- Env Validation Rules
+- Pub/Sub Push DTOs
+- Validation Library Users
+- Bank Account DTO
+- Category DTO
+- List Memory DTO
 - Build TS Config
 - Prisma TS Config
 - Nest CLI Config
 - Lint Config
-- Database Seed
-- Prisma Error Filter
+- App Bootstrap
+- List Chat DTO
+- AI Transaction DTO
 - Node Engine Pin
 
 ## God Nodes (most connected - your core abstractions)
 1. `@nestjs/common` - 59 edges
-2. `@nestjs/swagger` - 41 edges
-3. `PrismaService` - 41 edges
+2. `PrismaService` - 41 edges
+3. `@nestjs/swagger` - 39 edges
 4. `@prisma/client` - 34 edges
 5. `class-validator` - 32 edges
 6. `FinanceService` - 30 edges
 7. `FinanceController` - 23 edges
-8. `AiAgentController` - 20 edges
-9. `MemoryService` - 20 edges
-10. `createTestModule()` - 20 edges
+8. `compilerOptions` - 21 edges
+9. `AiAgentController` - 20 edges
+10. `MemoryService` - 20 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `resetState()` --shares_data_with--> `postgres service (pgvector/pgvector:pg16)`  [INFERRED]
+- `resetState()` --shares_data_with--> `postgres (pgvector/pgvector:pg16)`  [INFERRED]
   test/integration/harness.ts → docker-compose.yml
-- `resetState()` --shares_data_with--> `redis service (redis:7-alpine)`  [INFERRED]
+- `resetState()` --shares_data_with--> `redis (redis:7-alpine)`  [INFERRED]
   test/integration/harness.ts → docker-compose.yml
 - `Real DB/Queue, Fake Third Parties at Client Boundary` --references--> `createTestModule()`  [EXTRACTED]
   CLAUDE.md → test/integration/harness.ts
 - `Real DB/Queue, Fake Third Parties at Client Boundary` --references--> `resetState()`  [EXTRACTED]
   CLAUDE.md → test/integration/harness.ts
-- `Secretary Server (NestJS API)` --references--> `Full Suite (npm run test:int)`  [EXTRACTED]
-  README.md → CLAUDE.md
+- `Email Rules and Ingestion` --references--> `redis (redis:7-alpine)`  [INFERRED]
+  README.md → docker-compose.yml
 
 ## Import Cycles
 - None detected.
@@ -77,149 +88,169 @@
 ## Hyperedges (group relationships)
 - **Server Pre-Commit Check Gate** — claude_type_check, claude_oxlint_lint, claude_integration_tests, claude_pre_commit_gate [EXTRACTED 1.00]
 - **Integration Test Infrastructure** — test_integration_harness, vitest_config_int, docker_compose_postgres, docker_compose_redis [INFERRED 0.85]
-- **Secretary Server Feature Modules** — readme_ai_agent, readme_finance_ledger, readme_email_rules_ingestion, readme_local_calendar_google_push, readme_proactive_reminders [EXTRACTED 1.00]
+- **Server Local Setup Flow** — docker_compose_postgres, docker_compose_redis, readme_prisma_migrate_deploy, readme_seed_script, readme_secretary_server [EXTRACTED 1.00]
 
-## Communities (35 total, 5 thin omitted)
+## Communities (46 total, 11 thin omitted)
 
-### Community 0 - "Shared Library Imports"
+### Community 0 - "Google Clients & Test Harness"
 Cohesion: 0.05
-Nodes (19): bullmq, class-transformer, class-validator, @nestjs/bullmq, @nestjs/swagger, @prisma/client, CreateEmailRuleDto, UpdateEmailRuleDto (+11 more)
+Nodes (51): bullmq, @nestjs/schedule, GoogleTokens, decryptToken(), encryptToken(), toKey(), BASE, b64() (+43 more)
 
-### Community 1 - "Integration Test Suite"
-Cohesion: 0.07
-Nodes (40): BASE, b64(), message(), MessageSpec, assertTestPrefix(), createTestModule(), EMAIL_QUEUE, overrideConfig() (+32 more)
-
-### Community 2 - "Finance Ledger API"
+### Community 1 - "Finance DTOs & Ledger"
 Cohesion: 0.06
 Nodes (5): AdjustBalanceDto, FilterTransactionDto, SummaryQueryDto, FinanceController, FinanceService
 
-### Community 3 - "AI Agent Chat API"
+### Community 2 - "Email Ingestion API"
 Cohesion: 0.06
-Nodes (6): AiAgentController, ListChatDto, AgentService, toPlain(), ChatSessionService, TtsService
+Nodes (7): EmailWebhookDto, ListEmailLogDto, EmailController, ProcessEmailJobData, EmailRuleService, EmailService, JOB_PRIORITY
 
-### Community 4 - "Local Calendar"
-Cohesion: 0.07
-Nodes (8): CalendarController, CalendarService, CalendarTools, AiDeleteEventDto, AiUpdateEventDto, CreateEventDto, QueryCalendarDto, UpdateEventDto
-
-### Community 5 - "Semantic Memory"
-Cohesion: 0.05
-Nodes (12): ListMemoryDto, SaveMemoryDto, SearchMemoryDto, UpdateMemoryDto, HybridSearchParams, MemoryQueries, EmbeddingTaskType, MemorySearchResult (+4 more)
-
-### Community 6 - "Email Rules & Ingestion"
+### Community 3 - "Google OAuth & Calendar Sync"
 Cohesion: 0.06
-Nodes (5): EmailWebhookDto, ListEmailLogDto, EmailController, EmailRuleService, EmailService
+Nodes (16): cron, googleapis, GoogleClientFactory, JwtStrategy, CalendarSyncResult, CalendarSyncService, DirtyState, isGone() (+8 more)
 
-### Community 7 - "Google Clients & Prisma"
-Cohesion: 0.06
-Nodes (20): cron, googleapis, @nestjs/jwt, GoogleClientFactory, GoogleTokens, CalendarSyncResult, CalendarSyncService, DirtyState (+12 more)
-
-### Community 8 - "Character & Personas"
+### Community 4 - "Auth Controller & Sessions"
 Cohesion: 0.08
-Nodes (6): CharacterController, CharacterService, CreateCharacterDto, CreatePersonaDto, UpdateCharacterDto, UpdatePersonaDto
+Nodes (6): @nestjs/throttler, AuthController, AuthService, LoginDto, LogoutDto, RefreshTokenDto
 
-### Community 9 - "Auth & Sessions"
+### Community 5 - "Calendar API"
 Cohesion: 0.08
-Nodes (8): @nestjs/throttler, AuthController, AuthService, LoginDto, LogoutDto, RefreshTokenDto, Public(), PublicController
+Nodes (5): CalendarController, CalendarService, CalendarTools, AiDeleteEventDto, QueryCalendarDto
 
-### Community 10 - "Proactive Notifications"
+### Community 6 - "Proactive Notifications"
 Cohesion: 0.07
-Nodes (13): ProactiveChannel, TELEGRAM, ProactiveTriggerType, CUSTOM, INACTIVITY_FALLBACK, SCHEDULED_REMINDER, URGENT_EVENT, TriggerProactiveDto (+5 more)
+Nodes (14): AiTool(), ProactiveChannel, TELEGRAM, ProactiveTriggerType, CUSTOM, INACTIVITY_FALLBACK, SCHEDULED_REMINDER, URGENT_EVENT (+6 more)
+
+### Community 7 - "Character API"
+Cohesion: 0.10
+Nodes (4): CharacterController, CharacterService, CreateCharacterDto, UpdateCharacterDto
+
+### Community 8 - "Nest Module Wiring"
+Cohesion: 0.12
+Nodes (12): @nestjs/bullmq, @nestjs/common, @nestjs/core, AiAgentModule, AuthModule, CalendarModule, CharacterModule, PrismaExceptionFilter (+4 more)
+
+### Community 9 - "Server Docs & Local Infra"
+Cohesion: 0.07
+Nodes (29): Full Suite (npm run test:int), Integration Tests (vitest int-spec), Lint (npx oxlint src/ test/), server/ Working Rules, Changed Path to Spec Mapping Table, Type Check (npx tsc --noEmit), postgres (pgvector/pgvector:pg16), postgres_data volume (+21 more)
+
+### Community 10 - "Package Metadata"
+Cohesion: 0.06
+Nodes (31): author, description, license, name, private, version, @langchain/textsplitters, @nestjs/cli (+23 more)
 
 ### Community 11 - "Runtime Dependencies"
 Cohesion: 0.06
-Nodes (34): author, description, license, name, private, version, cookie-parser, helmet (+26 more)
-
-### Community 12 - "Core Dependency Set"
-Cohesion: 0.06
 Nodes (31): dependencies, bcrypt, bullmq, class-transformer, class-validator, cookie-parser, cron, dotenv (+23 more)
 
-### Community 13 - "Nest Module Wiring"
-Cohesion: 0.15
-Nodes (9): AiAgentModule, AuthModule, CalendarModule, CharacterModule, validate(), EmailModule, FinanceModule, PrismaModule (+1 more)
+### Community 12 - "Agent Service & Gemini"
+Cohesion: 0.09
+Nodes (19): @google/genai, rxjs, GenAiProvider, CHAT_MODEL, ChatFrame, ChatTurn, DEFAULT_MEMORY_RULE, DiscoveredTool (+11 more)
 
-### Community 14 - "Gemini & AI Tools"
-Cohesion: 0.12
-Nodes (17): @google/genai, GenAiProvider, CHAT_MODEL, ChatCharacter, ChatFrame, ChatTurn, DEFAULT_MEMORY_RULE, DiscoveredTool (+9 more)
+### Community 14 - "AI DTOs & Chat Sessions"
+Cohesion: 0.17
+Nodes (6): UpdateMemoryDto, ChatHistoryTurn, EmbeddingTaskType, MemorySearchResult, MemoryService, MemoryTools
 
 ### Community 15 - "Dev Dependencies"
 Cohesion: 0.09
 Nodes (23): devDependencies, @nestjs/cli, @nestjs/mau, @nestjs/schematics, @nestjs/testing, oxlint, prettier, prisma (+15 more)
 
-### Community 16 - "Chat Sessions & TTS"
-Cohesion: 0.14
-Nodes (4): rxjs, ChatStreamDto, TtsRequestDto, ChatHistoryTurn
+### Community 16 - "Chat Stream & Prompt Build"
+Cohesion: 0.10
+Nodes (5): ChatStreamDto, joinRounds(), ReplyStreamParser, SIMPLE_ESCAPES, buildCharacterPrompt()
 
 ### Community 17 - "TypeScript Config"
-Cohesion: 0.10
-Nodes (19): compilerOptions, allowSyntheticDefaultImports, declaration, emitDecoratorMetadata, esModuleInterop, experimentalDecorators, incremental, isolatedModules (+11 more)
+Cohesion: 0.09
+Nodes (21): compilerOptions, allowSyntheticDefaultImports, declaration, emitDecoratorMetadata, esModuleInterop, experimentalDecorators, incremental, isolatedModules (+13 more)
 
-### Community 18 - "npm Scripts"
+### Community 18 - "Calendar DTOs & AI Tools"
+Cohesion: 0.18
+Nodes (3): AiUpdateEventDto, CreateEventDto, UpdateEventDto
+
+### Community 19 - "Memory Search DTO"
+Cohesion: 0.11
+Nodes (3): SearchMemoryDto, HybridSearchParams, MemoryQueries
+
+### Community 20 - "npm Scripts"
 Cohesion: 0.11
 Nodes (18): scripts, build, deploy, format, lint, migrate, postinstall, seed (+10 more)
 
-### Community 19 - "Email Worker Pipeline"
-Cohesion: 0.17
+### Community 21 - "Email Rules"
+Cohesion: 0.20
+Nodes (5): @prisma/client, CreateEmailRuleDto, UpdateEmailRuleDto, ClassifiableEmail, RULE_PRECEDENCE
+
+### Community 22 - "TTS & Chat Session Service"
+Cohesion: 0.14
+Nodes (3): TtsRequestDto, ChatSessionService, TtsService
+
+### Community 23 - "Email AI & Worker"
+Cohesion: 0.20
 Nodes (3): EmailAiService, EmailClassification, EmailProcessor
 
-### Community 20 - "App Bootstrap & Guards"
-Cohesion: 0.18
-Nodes (7): @nestjs/common, @nestjs/core, @nestjs/schedule, PendingAction, PendingActionStore, AppModule, IS_PUBLIC_KEY
-
-### Community 21 - "JWT & Config Wiring"
-Cohesion: 0.18
-Nodes (5): @nestjs/config, @nestjs/passport, JwtAuthGuard, JwtPayload, JwtStrategy
-
-### Community 22 - "Server Docs & Rules"
-Cohesion: 0.15
-Nodes (11): Lint (npx oxlint src/ test/), server/ Working Rules, Type Check (npx tsc --noEmit), documents/api.md, Email Rules and Ingestion, documents/environment.md, Finance Ledger, Local Calendar with One-Way Google Push (+3 more)
-
-### Community 23 - "Local Infra & Test Gate"
+### Community 25 - "Auth Module & JWT Guard"
 Cohesion: 0.21
-Nodes (11): Full Suite (npm run test:int), Integration Tests (vitest int-spec), Changed Path to Spec Mapping Table, postgres service (pgvector/pgvector:pg16), postgres_data volume, redis service (redis:7-alpine), redis_data volume, prisma/schema.prisma (+3 more)
+Nodes (6): @nestjs/config, @nestjs/jwt, @nestjs/passport, JwtAuthGuard, JwtPayload, IS_PUBLIC_KEY
 
-### Community 27 - "Test Runner Setup"
-Cohesion: 0.25
-Nodes (4): ioredis, pg, vite-tsconfig-paths, vitest
+### Community 26 - "Finance DTO Files"
+Cohesion: 0.41
+Nodes (4): @nestjs/swagger, UpdateBankAccountDto, UpdateCategoryDto, UpdateTransactionDto
 
-### Community 28 - "Build TS Config"
+### Community 27 - "Tool Calling & Confirmation"
+Cohesion: 0.19
+Nodes (3): AgentService, toPlain(), PendingActionStore
+
+### Community 28 - "Database Seed Entry"
+Cohesion: 0.17
+Nodes (7): seedCharacters(), main(), bcrypt, dotenv, ioredis, pg, @prisma/adapter-pg
+
+### Community 29 - "Character Seed Loader"
+Cohesion: 0.22
+Nodes (9): bullets(), DEFAULT_DIR, Dict, label(), LIST_FIELDS, loadCharacterFile(), optionalString(), renderCharacterPrompt() (+1 more)
+
+### Community 30 - "Root App Controller"
+Cohesion: 0.24
+Nodes (3): AppController, AppService, Public()
+
+### Community 34 - "Validation Library Users"
+Cohesion: 0.38
+Nodes (3): class-transformer, class-validator, validate()
+
+### Community 38 - "Build TS Config"
 Cohesion: 0.25
 Nodes (7): ./tsconfig.json, compilerOptions, moduleResolution, rootDir, exclude, extends, include
 
-### Community 29 - "Prisma TS Config"
+### Community 39 - "Prisma TS Config"
 Cohesion: 0.25
 Nodes (7): compilerOptions, esModuleInterop, module, moduleResolution, skipLibCheck, target, include
 
-### Community 30 - "Nest CLI Config"
+### Community 40 - "Nest CLI Config"
 Cohesion: 0.29
 Nodes (6): collection, compilerOptions, deleteOutDir, plugins, $schema, sourceRoot
 
-### Community 31 - "Lint Config"
+### Community 41 - "Lint Config"
 Cohesion: 0.29
 Nodes (6): env, node, rules, @typescript-eslint/no-explicit-any, @typescript-eslint/no-floating-promises, $schema
 
-### Community 32 - "Database Seed"
+### Community 42 - "App Bootstrap"
 Cohesion: 0.29
-Nodes (3): bcrypt, dotenv, @prisma/adapter-pg
+Nodes (4): cookie-parser, helmet, @nestjs/platform-express, AppModule
 
 ## Knowledge Gaps
-- **37 isolated node(s):** `passport`, `reflect-metadata`, `swagger-ui-express`, `@nestjs/cli`, `@nestjs/mau` (+32 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 451 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **5 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **42 isolated node(s):** `passport`, `reflect-metadata`, `swagger-ui-express`, `@nestjs/cli`, `@nestjs/mau` (+37 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 465 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **11 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `@nestjs/common` connect `App Bootstrap & Guards` to `Shared Library Imports`, `Integration Test Suite`, `Local Calendar`, `Semantic Memory`, `Google Clients & Prisma`, `Character & Personas`, `Auth & Sessions`, `Proactive Notifications`, `Runtime Dependencies`, `Nest Module Wiring`, `Gemini & AI Tools`, `Chat Sessions & TTS`, `JWT & Config Wiring`, `Root App Controller`?**
-  _High betweenness centrality (0.220) - this node is a cross-community bridge._
+- **Why does `@nestjs/common` connect `Nest Module Wiring` to `Google Clients & Test Harness`, `Validation Library Users`, `Google OAuth & Calendar Sync`, `Auth Controller & Sessions`, `Email Ingestion API`, `Proactive Notifications`, `Character API`, `Package Metadata`, `App Bootstrap`, `Agent Service & Gemini`, `AI DTOs & Chat Sessions`, `Calendar DTOs & AI Tools`, `Email Rules`, `Auth Module & JWT Guard`, `Finance DTO Files`, `Root App Controller`?**
+  _High betweenness centrality (0.241) - this node is a cross-community bridge._
 - **What connects `passport`, `reflect-metadata`, `swagger-ui-express` to the rest of the system?**
-  _37 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Shared Library Imports` be split into smaller, more focused modules?**
-  _Cohesion score 0.05182072829131653 - nodes in this community are weakly interconnected._
-- **Why does `@nestjs/swagger` connect `Shared Library Imports` to `Local Calendar`, `Semantic Memory`, `Character & Personas`, `Auth & Sessions`, `Proactive Notifications`, `Runtime Dependencies`, `Chat Sessions & TTS`, `App Bootstrap & Guards`?**
-  _High betweenness centrality (0.093) - this node is a cross-community bridge._
-- **Should `Integration Test Suite` be split into smaller, more focused modules?**
-  _Cohesion score 0.06550632911392405 - nodes in this community are weakly interconnected._
-- **Why does `dependencies` connect `Core Dependency Set` to `Runtime Dependencies`?**
-  _High betweenness centrality (0.056) - this node is a cross-community bridge._
-- **Should `Finance Ledger API` be split into smaller, more focused modules?**
+  _42 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `Google Clients & Test Harness` be split into smaller, more focused modules?**
+  _Cohesion score 0.050669772859638904 - nodes in this community are weakly interconnected._
+- **Why does `@nestjs/swagger` connect `Finance DTO Files` to `Validation Library Users`, `Email Ingestion API`, `Auth Controller & Sessions`, `Proactive Notifications`, `Character API`, `Package Metadata`, `App Bootstrap`, `AI DTOs & Chat Sessions`, `Chat Stream & Prompt Build`, `Calendar DTOs & AI Tools`, `Email Rules`?**
+  _High betweenness centrality (0.083) - this node is a cross-community bridge._
+- **Should `Finance DTOs & Ledger` be split into smaller, more focused modules?**
   _Cohesion score 0.06385964912280702 - nodes in this community are weakly interconnected._
+- **Why does `@prisma/client` connect `Email Rules` to `Google Clients & Test Harness`, `Validation Library Users`, `Google OAuth & Calendar Sync`, `Email Ingestion API`, `Nest Module Wiring`, `Package Metadata`, `Agent Service & Gemini`, `AI DTOs & Chat Sessions`, `Chat Stream & Prompt Build`, `Calendar DTOs & AI Tools`, `Memory Search DTO`, `Auth Module & JWT Guard`, `Finance DTO Files`, `Database Seed Entry`, `Character Seed Loader`?**
+  _High betweenness centrality (0.056) - this node is a cross-community bridge._
+- **Should `Email Ingestion API` be split into smaller, more focused modules?**
+  _Cohesion score 0.05913461538461538 - nodes in this community are weakly interconnected._
