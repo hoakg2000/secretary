@@ -2,15 +2,18 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ChatRole } from '@prisma/client';
 import { lastValueFrom, toArray } from 'rxjs';
 import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
-import { AgentService, DEFAULT_MEMORY_RULE } from '../../src/ai-agent/services/agent/agent.service';
+import {
+  AgentService,
+  DEFAULT_MEMORY_RULE,
+} from '../../src/ai-agent/services/agent/agent.service';
 import { ChatSessionService } from '../../src/ai-agent/services/chat/chat-session.service';
 import { MemoryService } from '../../src/ai-agent/services/memory/memory.service';
 import {
   MISSING,
   calls,
   createTestModule,
-  rejection,
   httpError,
+  rejection,
   resetState,
   seedAccount,
   seedCharacter,
@@ -47,15 +50,30 @@ describe('chat integration', () => {
     vi.restoreAllMocks();
   });
 
-  const makeSession = async (userId: string, data: Record<string, unknown> = {}) =>
-    ctx.prisma.chatSession.create({ data: { userId, ...data } as any });
+  const makeSession = async (
+    userId: string,
+    data: Record<string, unknown> = {},
+  ) => ctx.prisma.chatSession.create({ data: { userId, ...data } as any });
   /** message created `index` seconds after BASE so the order is deterministic */
-  const makeMessage = (sessionId: string, index: number, role: ChatRole, content: string) =>
+  const makeMessage = (
+    sessionId: string,
+    index: number,
+    role: ChatRole,
+    content: string,
+  ) =>
     ctx.prisma.chatMessage.create({
-      data: { sessionId, role, content, createdAt: new Date(BASE + index * 1000) },
+      data: {
+        sessionId,
+        role,
+        content,
+        createdAt: new Date(BASE + index * 1000),
+      },
     });
   const messagesOf = (sessionId: string) =>
-    ctx.prisma.chatMessage.findMany({ where: { sessionId }, orderBy: { createdAt: 'asc' } });
+    ctx.prisma.chatMessage.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'asc' },
+    });
 
   // ---------------------------------------------------------------- ChatSessionService
 
@@ -65,10 +83,21 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await seedCharacter(ctx.prisma);
 
-        const session = await sessions.resolve(user.id, undefined, character.id, 'x'.repeat(100));
+        const session = await sessions.resolve(
+          user.id,
+          undefined,
+          character.id,
+          'x'.repeat(100),
+        );
 
-        const saved = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
-        expect(saved).toMatchObject({ userId: user.id, characterId: character.id, title: 'x'.repeat(80) });
+        const saved = await ctx.prisma.chatSession.findUniqueOrThrow({
+          where: { id: session.id },
+        });
+        expect(saved).toMatchObject({
+          userId: user.id,
+          characterId: character.id,
+          title: 'x'.repeat(80),
+        });
       });
 
       it('returns the user own session', async () => {
@@ -86,13 +115,17 @@ describe('chat integration', () => {
         const other = await seedUser(ctx.prisma);
         const foreign = await makeSession(owner.id);
 
-        await expect(sessions.resolve(other.id, foreign.id)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          sessions.resolve(other.id, foreign.id),
+        ).rejects.toBeInstanceOf(NotFoundException);
       });
 
       it('returns 404 for an unknown session', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(sessions.resolve(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(sessions.resolve(user.id, MISSING)).rejects.toBeInstanceOf(
+          NotFoundException,
+        );
       });
     });
 
@@ -102,30 +135,53 @@ describe('chat integration', () => {
         const old = new Date('2020-01-01T00:00:00Z');
         const session = await makeSession(user.id, { lastMessageAt: old });
 
-        const message = await sessions.appendMessage(session.id, ChatRole.MODEL, '  hi there  ', [{ tool: 't' }]);
+        const message = await sessions.appendMessage(
+          session.id,
+          ChatRole.MODEL,
+          '  hi there  ',
+          [{ tool: 't' }],
+        );
 
-        const saved = await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: message.id } });
+        const saved = await ctx.prisma.chatMessage.findUniqueOrThrow({
+          where: { id: message.id },
+        });
         expect(saved).toMatchObject({
           sessionId: session.id,
           role: 'MODEL',
           content: '  hi there  ',
           toolCalls: [{ tool: 't' }],
         });
-        const after = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
-        expect(after.lastMessageAt.getTime()).toBeGreaterThan(old.getTime() + 86_400_000);
+        const after = await ctx.prisma.chatSession.findUniqueOrThrow({
+          where: { id: session.id },
+        });
+        expect(after.lastMessageAt.getTime()).toBeGreaterThan(
+          old.getTime() + 86_400_000,
+        );
       });
 
       it('stores no tool calls when none are given', async () => {
         const user = await seedUser(ctx.prisma);
         const session = await makeSession(user.id);
 
-        const message = await sessions.appendMessage(session.id, ChatRole.USER, 'hello');
+        const message = await sessions.appendMessage(
+          session.id,
+          ChatRole.USER,
+          'hello',
+        );
 
-        expect((await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: message.id } })).toolCalls).toBeNull();
+        expect(
+          (
+            await ctx.prisma.chatMessage.findUniqueOrThrow({
+              where: { id: message.id },
+            })
+          ).toolCalls,
+        ).toBeNull();
       });
 
       it('writes nothing for an unknown session', async () => {
-        expect(await rejection(sessions.appendMessage(MISSING, ChatRole.USER, 'x'))).toMatchObject({ code: 'P2003' });
+        expect(
+          await rejection(sessions.appendMessage(MISSING, ChatRole.USER, 'x')),
+        ).toMatchObject({ code: 'P2003' });
 
         expect(await ctx.prisma.chatMessage.count()).toBe(0);
       });
@@ -137,7 +193,14 @@ describe('chat integration', () => {
         const session = await makeSession(user.id);
         const rows = [];
         for (let i = 0; i < 25; i++) {
-          rows.push(await makeMessage(session.id, i, i % 2 === 0 ? ChatRole.USER : ChatRole.MODEL, `m${i}`));
+          rows.push(
+            await makeMessage(
+              session.id,
+              i,
+              i % 2 === 0 ? ChatRole.USER : ChatRole.MODEL,
+              `m${i}`,
+            ),
+          );
         }
 
         const history = await sessions.recentHistory(session.id, rows[24].id);
@@ -145,7 +208,10 @@ describe('chat integration', () => {
         expect(history).toHaveLength(20);
         expect(history[0]).toEqual({ role: 'user', parts: [{ text: 'm4' }] });
         expect(history[1]).toEqual({ role: 'model', parts: [{ text: 'm5' }] });
-        expect(history[19]).toEqual({ role: 'model', parts: [{ text: 'm23' }] });
+        expect(history[19]).toEqual({
+          role: 'model',
+          parts: [{ text: 'm23' }],
+        });
       });
 
       it('honours a smaller limit and excludes the cursor and newer messages', async () => {
@@ -153,7 +219,14 @@ describe('chat integration', () => {
         const session = await makeSession(user.id);
         const rows = [];
         for (let i = 0; i < 6; i++) {
-          rows.push(await makeMessage(session.id, i, i % 2 === 0 ? ChatRole.USER : ChatRole.MODEL, `m${i}`));
+          rows.push(
+            await makeMessage(
+              session.id,
+              i,
+              i % 2 === 0 ? ChatRole.USER : ChatRole.MODEL,
+              `m${i}`,
+            ),
+          );
         }
 
         const history = await sessions.recentHistory(session.id, rows[4].id, 2);
@@ -193,7 +266,9 @@ describe('chat integration', () => {
         await makeMessage(session.id, 0, ChatRole.MODEL, 'only model');
         const current = await makeMessage(session.id, 1, ChatRole.USER, 'now');
 
-        expect(await sessions.recentHistory(session.id, current.id)).toEqual([]);
+        expect(await sessions.recentHistory(session.id, current.id)).toEqual(
+          [],
+        );
       });
 
       it('ignores the messages of other sessions', async () => {
@@ -214,12 +289,23 @@ describe('chat integration', () => {
       it('sets chat_messages.memory_id', async () => {
         const user = await seedUser(ctx.prisma);
         const session = await makeSession(user.id);
-        const message = await makeMessage(session.id, 0, ChatRole.USER, 'remember this');
+        const message = await makeMessage(
+          session.id,
+          0,
+          ChatRole.USER,
+          'remember this',
+        );
         const saved = await memory.saveMemory({ content: 'remember this' });
 
         await sessions.linkMemory(message.id, saved.id);
 
-        expect((await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: message.id } })).memoryId).toBe(saved.id);
+        expect(
+          (
+            await ctx.prisma.chatMessage.findUniqueOrThrow({
+              where: { id: message.id },
+            })
+          ).memoryId,
+        ).toBe(saved.id);
       });
 
       it('fails for a memory already linked to another message (memory_id is unique)', async () => {
@@ -230,7 +316,9 @@ describe('chat integration', () => {
         const saved = await memory.saveMemory({ content: 'm' });
         await sessions.linkMemory(first.id, saved.id);
 
-        expect(await rejection(sessions.linkMemory(second.id, saved.id))).toMatchObject({ code: 'P2002' });
+        expect(
+          await rejection(sessions.linkMemory(second.id, saved.id)),
+        ).toMatchObject({ code: 'P2002' });
       });
     });
 
@@ -238,10 +326,22 @@ describe('chat integration', () => {
       it('lists only the user sessions, latest message first, with total', async () => {
         const user = await seedUser(ctx.prisma);
         const other = await seedUser(ctx.prisma);
-        await makeSession(user.id, { title: 'old', lastMessageAt: new Date(BASE) });
-        await makeSession(user.id, { title: 'new', lastMessageAt: new Date(BASE + 2000) });
-        await makeSession(user.id, { title: 'mid', lastMessageAt: new Date(BASE + 1000) });
-        await makeSession(other.id, { title: 'foreign', lastMessageAt: new Date(BASE + 5000) });
+        await makeSession(user.id, {
+          title: 'old',
+          lastMessageAt: new Date(BASE),
+        });
+        await makeSession(user.id, {
+          title: 'new',
+          lastMessageAt: new Date(BASE + 2000),
+        });
+        await makeSession(user.id, {
+          title: 'mid',
+          lastMessageAt: new Date(BASE + 1000),
+        });
+        await makeSession(other.id, {
+          title: 'foreign',
+          lastMessageAt: new Date(BASE + 5000),
+        });
 
         const result = await sessions.listSessions(user.id);
 
@@ -251,7 +351,11 @@ describe('chat integration', () => {
 
       it('pages through the sessions', async () => {
         const user = await seedUser(ctx.prisma);
-        for (let i = 0; i < 3; i++) await makeSession(user.id, { title: `s${i}`, lastMessageAt: new Date(BASE + i * 1000) });
+        for (let i = 0; i < 3; i++)
+          await makeSession(user.id, {
+            title: `s${i}`,
+            lastMessageAt: new Date(BASE + i * 1000),
+          });
 
         const page2 = await sessions.listSessions(user.id, 2, 2);
 
@@ -262,7 +366,10 @@ describe('chat integration', () => {
       it('returns an empty list for a user without sessions', async () => {
         const user = await seedUser(ctx.prisma);
 
-        expect(await sessions.listSessions(user.id)).toMatchObject({ items: [], total: 0 });
+        expect(await sessions.listSessions(user.id)).toMatchObject({
+          items: [],
+          total: 0,
+        });
       });
     });
 
@@ -277,7 +384,11 @@ describe('chat integration', () => {
         const all = await sessions.listMessages(user.id, session.id);
         const page = await sessions.listMessages(user.id, session.id, 2, 2);
 
-        expect(all.items.map((m) => m.content)).toEqual(['first', 'second', 'third']);
+        expect(all.items.map((m) => m.content)).toEqual([
+          'first',
+          'second',
+          'third',
+        ]);
         expect(all.total).toBe(3);
         expect(page.items.map((m) => m.content)).toEqual(['third']);
       });
@@ -287,13 +398,17 @@ describe('chat integration', () => {
         const other = await seedUser(ctx.prisma);
         const foreign = await makeSession(owner.id);
 
-        await expect(sessions.listMessages(other.id, foreign.id)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          sessions.listMessages(other.id, foreign.id),
+        ).rejects.toBeInstanceOf(NotFoundException);
       });
 
       it('returns 404 for an unknown session', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(sessions.listMessages(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          sessions.listMessages(user.id, MISSING),
+        ).rejects.toBeInstanceOf(NotFoundException);
       });
     });
 
@@ -301,8 +416,15 @@ describe('chat integration', () => {
       it('returns the message with its session and character', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await seedCharacter(ctx.prisma, { name: 'Mika' });
-        const session = await makeSession(user.id, { characterId: character.id });
-        const message = await makeMessage(session.id, 0, ChatRole.MODEL, 'hello');
+        const session = await makeSession(user.id, {
+          characterId: character.id,
+        });
+        const message = await makeMessage(
+          session.id,
+          0,
+          ChatRole.MODEL,
+          'hello',
+        );
 
         const found = await sessions.findOwnMessage(user.id, message.id);
 
@@ -314,15 +436,24 @@ describe('chat integration', () => {
         const owner = await seedUser(ctx.prisma);
         const other = await seedUser(ctx.prisma);
         const session = await makeSession(owner.id);
-        const message = await makeMessage(session.id, 0, ChatRole.MODEL, 'secret');
+        const message = await makeMessage(
+          session.id,
+          0,
+          ChatRole.MODEL,
+          'secret',
+        );
 
-        await expect(sessions.findOwnMessage(other.id, message.id)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          sessions.findOwnMessage(other.id, message.id),
+        ).rejects.toBeInstanceOf(NotFoundException);
       });
 
       it('returns 404 for an unknown message', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(sessions.findOwnMessage(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          sessions.findOwnMessage(user.id, MISSING),
+        ).rejects.toBeInstanceOf(NotFoundException);
       });
     });
 
@@ -330,15 +461,24 @@ describe('chat integration', () => {
       it('deletes the session and its messages but keeps the memories created from them', async () => {
         const user = await seedUser(ctx.prisma);
         const session = await makeSession(user.id);
-        const message = await makeMessage(session.id, 0, ChatRole.USER, 'remember');
+        const message = await makeMessage(
+          session.id,
+          0,
+          ChatRole.USER,
+          'remember',
+        );
         const saved = await memory.saveMemory({ content: 'remember' });
         await sessions.linkMemory(message.id, saved.id);
 
-        expect(await sessions.deleteSession(user.id, session.id)).toEqual({ success: true });
+        expect(await sessions.deleteSession(user.id, session.id)).toEqual({
+          success: true,
+        });
 
         expect(await ctx.prisma.chatSession.count()).toBe(0);
         expect(await ctx.prisma.chatMessage.count()).toBe(0);
-        expect(await ctx.prisma.aiMemory.count({ where: { id: saved.id } })).toBe(1);
+        expect(
+          await ctx.prisma.aiMemory.count({ where: { id: saved.id } }),
+        ).toBe(1);
       });
 
       it('returns 404 for another user session and deletes nothing', async () => {
@@ -347,7 +487,9 @@ describe('chat integration', () => {
         const session = await makeSession(owner.id);
         await makeMessage(session.id, 0, ChatRole.USER, 'keep');
 
-        await expect(sessions.deleteSession(other.id, session.id)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          sessions.deleteSession(other.id, session.id),
+        ).rejects.toBeInstanceOf(NotFoundException);
 
         expect(await ctx.prisma.chatSession.count()).toBe(1);
         expect(await ctx.prisma.chatMessage.count()).toBe(1);
@@ -356,7 +498,9 @@ describe('chat integration', () => {
       it('returns 404 for an unknown session', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(sessions.deleteSession(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          sessions.deleteSession(user.id, MISSING),
+        ).rejects.toBeInstanceOf(NotFoundException);
       });
     });
   });
@@ -365,18 +509,30 @@ describe('chat integration', () => {
 
   describe('AgentService.chatStream', () => {
     const stream = async (userId: string, dto: Partial<ChatStreamDto>) => {
-      const observable = await agent.chatStream(userId, { message: 'hello', ...dto } as ChatStreamDto);
+      const observable = await agent.chatStream(userId, {
+        message: 'hello',
+        ...dto,
+      } as ChatStreamDto);
       const events = await lastValueFrom(observable.pipe(toArray()));
-      return events.map((e) => JSON.parse(e.data) as { type: string; [key: string]: any });
+      return events.map(
+        (e) => JSON.parse(e.data) as { type: string; [key: string]: any },
+      );
     };
     const types = (frames: { type: string }[]) => frames.map((f) => f.type);
-    const instructionOf = (callIndex = 0) => ctx.genAi.create.mock.calls[callIndex][0].config.systemInstruction as string;
+    const instructionOf = (callIndex = 0) =>
+      ctx.genAi.create.mock.calls[callIndex][0].config
+        .systemInstruction as string;
     const withCharacter = (data: Record<string, unknown> = {}) =>
       ctx.prisma.character.create({
         data: {
           name: 'Mika',
           voiceId: 'v1',
-          personas: { create: [{ type: 'TONE', value: 'playful and warm' }, { type: 'IDENTITY', value: 'a cat girl' }] },
+          personas: {
+            create: [
+              { type: 'TONE', value: 'playful and warm' },
+              { type: 'IDENTITY', value: 'a cat girl' },
+            ],
+          },
           ...data,
         },
       });
@@ -387,12 +543,23 @@ describe('chat integration', () => {
         const character = await withCharacter();
         ctx.genAi.script.push([text('Hi '), text('there')]);
 
-        const frames = await stream(user.id, { message: 'hello bot', characterId: character.id });
+        const frames = await stream(user.id, {
+          message: 'hello bot',
+          characterId: character.id,
+        });
 
         expect(types(frames)).toEqual(['session', 'text', 'text', 'done']);
-        expect(frames.filter((f) => f.type === 'text').map((f) => f.content)).toEqual(['Hi ', 'there']);
-        const session = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: frames[0].sessionId } });
-        expect(session).toMatchObject({ userId: user.id, characterId: character.id, title: 'hello bot' });
+        expect(
+          frames.filter((f) => f.type === 'text').map((f) => f.content),
+        ).toEqual(['Hi ', 'there']);
+        const session = await ctx.prisma.chatSession.findUniqueOrThrow({
+          where: { id: frames[0].sessionId },
+        });
+        expect(session).toMatchObject({
+          userId: user.id,
+          characterId: character.id,
+          title: 'hello bot',
+        });
         const stored = await messagesOf(session.id);
         expect(stored.map((m) => [m.role, m.content])).toEqual(
           expect.arrayContaining([
@@ -407,7 +574,9 @@ describe('chat integration', () => {
       it('rejects a new session without characterId with 400 and creates nothing', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(stream(user.id, {})).rejects.toBeInstanceOf(BadRequestException);
+        await expect(stream(user.id, {})).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
 
         expect(await ctx.prisma.chatSession.count()).toBe(0);
         expect(ctx.genAi.create).not.toHaveBeenCalled();
@@ -416,7 +585,9 @@ describe('chat integration', () => {
       it('rejects an unknown characterId with 404, creates nothing and does not call the model', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(stream(user.id, { characterId: MISSING })).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          stream(user.id, { characterId: MISSING }),
+        ).rejects.toBeInstanceOf(NotFoundException);
 
         expect(await ctx.prisma.chatSession.count()).toBe(0);
         expect(await ctx.prisma.chatMessage.count()).toBe(0);
@@ -426,7 +597,9 @@ describe('chat integration', () => {
       it('rejects an unknown sessionId with 404 without calling the model', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(stream(user.id, { sessionId: MISSING })).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          stream(user.id, { sessionId: MISSING }),
+        ).rejects.toBeInstanceOf(NotFoundException);
 
         expect(ctx.genAi.create).not.toHaveBeenCalled();
       });
@@ -436,7 +609,9 @@ describe('chat integration', () => {
         const other = await seedUser(ctx.prisma);
         const session = await makeSession(owner.id);
 
-        await expect(stream(other.id, { sessionId: session.id })).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          stream(other.id, { sessionId: session.id }),
+        ).rejects.toBeInstanceOf(NotFoundException);
 
         expect(await ctx.prisma.chatMessage.count()).toBe(0);
         expect(ctx.genAi.create).not.toHaveBeenCalled();
@@ -449,7 +624,10 @@ describe('chat integration', () => {
         const session = await makeSession(user.id, { characterId: stored.id });
         ctx.genAi.script.push([text('ok')]);
 
-        const frames = await stream(user.id, { sessionId: session.id, characterId: other.id });
+        const frames = await stream(user.id, {
+          sessionId: session.id,
+          characterId: other.id,
+        });
 
         expect(frames[0]).toEqual({ type: 'session', sessionId: session.id });
         expect(instructionOf()).toContain('StoredName');
@@ -480,7 +658,9 @@ describe('chat integration', () => {
           { role: 'user', parts: [{ text: 'earlier question' }] },
           { role: 'model', parts: [{ text: 'earlier answer' }] },
         ]);
-        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledWith({ message: 'follow up' });
+        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledWith({
+          message: 'follow up',
+        });
       });
 
       it('moves last_message_at forward', async () => {
@@ -490,15 +670,21 @@ describe('chat integration', () => {
 
         await stream(user.id, { sessionId: session.id });
 
-        const after = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
-        expect(after.lastMessageAt.getTime()).toBeGreaterThan(old.getTime() + 86_400_000);
+        const after = await ctx.prisma.chatSession.findUniqueOrThrow({
+          where: { id: session.id },
+        });
+        expect(after.lastMessageAt.getTime()).toBeGreaterThan(
+          old.getTime() + 86_400_000,
+        );
       });
     });
 
     describe('system instruction', () => {
       it('contains the character name, its personas and the custom memory rule', async () => {
         const user = await seedUser(ctx.prisma);
-        const character = await withCharacter({ memoryRule: 'Only remember birthdays.' });
+        const character = await withCharacter({
+          memoryRule: 'Only remember birthdays.',
+        });
 
         await stream(user.id, { characterId: character.id });
 
@@ -532,7 +718,9 @@ describe('chat integration', () => {
       it('falls back to the generic prompt and the default rule when the session character was deleted', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter({ memoryRule: 'custom rule' });
-        const session = await makeSession(user.id, { characterId: character.id });
+        const session = await makeSession(user.id, {
+          characterId: character.id,
+        });
         await ctx.prisma.character.delete({ where: { id: character.id } });
 
         const frames = await stream(user.id, { sessionId: session.id });
@@ -560,9 +748,17 @@ describe('chat integration', () => {
 
         await stream(user.id, { characterId: character.id });
 
-        const names = ctx.genAi.create.mock.calls[0][0].config.tools[0].functionDeclarations.map((d: any) => d.name);
+        const names =
+          ctx.genAi.create.mock.calls[0][0].config.tools[0].functionDeclarations.map(
+            (d: any) => d.name,
+          );
         expect(names).toEqual(
-          expect.arrayContaining(['get_financial_summary', 'create_financial_transaction', 'save_user_memory', 'search_semantic_memory']),
+          expect.arrayContaining([
+            'get_financial_summary',
+            'create_financial_transaction',
+            'save_user_memory',
+            'search_semantic_memory',
+          ]),
         );
       });
 
@@ -575,7 +771,10 @@ describe('chat integration', () => {
         await memory.saveMemory({ content: 'user loves jazz' });
         await memory.saveMemory({ content: 'user hates spiders' });
 
-        await stream(user.id, { characterId: character.id, message: 'what music' });
+        await stream(user.id, {
+          characterId: character.id,
+          message: 'what music',
+        });
 
         expect(instructionOf()).toContain('- user loves jazz');
         expect(instructionOf()).not.toContain('user hates spiders');
@@ -594,7 +793,9 @@ describe('chat integration', () => {
       it('still answers when the memory retrieval fails', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.embedContent.mockRejectedValueOnce(new Error('embedding down'));
+        ctx.genAi.embedContent.mockRejectedValueOnce(
+          new Error('embedding down'),
+        );
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -607,21 +808,40 @@ describe('chat integration', () => {
       it('runs get_financial_summary against real finance data and feeds the result back to the model', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        await seedAccount(ctx.prisma, { accountName: 'Savings', cachedBalance: 1234567 });
-        ctx.genAi.script.push([calls({ id: 'c1', name: 'get_financial_summary', args: {} })], [text('You have money')]);
+        await seedAccount(ctx.prisma, {
+          accountName: 'Savings',
+          cachedBalance: 1234567,
+        });
+        ctx.genAi.script.push(
+          [calls({ id: 'c1', name: 'get_financial_summary', args: {} })],
+          [text('You have money')],
+        );
 
         const frames = await stream(user.id, { characterId: character.id });
 
-        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'text', 'done']);
+        expect(types(frames)).toEqual([
+          'session',
+          'tool_call',
+          'tool_result',
+          'text',
+          'done',
+        ]);
         expect(frames[1]).toMatchObject({ tool: 'get_financial_summary' });
         const result = frames[2].result;
         expect(result.accounts).toHaveLength(1);
         expect(result.accounts[0]).toMatchObject({ accountName: 'Savings' });
         expect(Number(result.accounts[0].cachedBalance)).toBe(1234567);
         // the second model round answers the function call with the same result
-        const secondMessage = ctx.genAi.sendMessageStream.mock.calls[1][0].message;
+        const secondMessage =
+          ctx.genAi.sendMessageStream.mock.calls[1][0].message;
         expect(secondMessage).toEqual([
-          { functionResponse: { id: 'c1', name: 'get_financial_summary', response: { result } } },
+          {
+            functionResponse: {
+              id: 'c1',
+              name: 'get_financial_summary',
+              response: { result },
+            },
+          },
         ]);
       });
 
@@ -629,38 +849,63 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         await seedAccount(ctx.prisma);
-        ctx.genAi.script.push([calls({ name: 'get_financial_summary', args: {} })], [text('done')]);
+        ctx.genAi.script.push(
+          [calls({ name: 'get_financial_summary', args: {} })],
+          [text('done')],
+        );
 
         const frames = await stream(user.id, { characterId: character.id });
 
-        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
+        const model = (await messagesOf(frames[0].sessionId)).find(
+          (m) => m.role === 'MODEL',
+        )!;
         expect(model.content).toBe('done');
-        expect(model.toolCalls).toMatchObject([{ tool: 'get_financial_summary', result: { accounts: [{ accountName: 'Main' }] } }]);
+        expect(model.toolCalls).toMatchObject([
+          {
+            tool: 'get_financial_summary',
+            result: { accounts: [{ accountName: 'Main' }] },
+          },
+        ]);
       });
 
       it('answers all function calls of one round in a single message', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         ctx.genAi.script.push(
-          [calls({ id: 'a', name: 'get_financial_summary', args: {} }, { id: 'b', name: 'get_financial_summary', args: {} })],
+          [
+            calls(
+              { id: 'a', name: 'get_financial_summary', args: {} },
+              { id: 'b', name: 'get_financial_summary', args: {} },
+            ),
+          ],
           [text('ok')],
         );
 
         await stream(user.id, { characterId: character.id });
 
         expect(ctx.genAi.sendMessageStream).toHaveBeenCalledTimes(2);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message.map((p: any) => p.functionResponse.id)).toEqual(['a', 'b']);
+        expect(
+          ctx.genAi.sendMessageStream.mock.calls[1][0].message.map(
+            (p: any) => p.functionResponse.id,
+          ),
+        ).toEqual(['a', 'b']);
       });
 
       it('reports an unknown tool to the model instead of failing the turn', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([calls({ id: 'x', name: 'does_not_exist', args: {} })], [text('sorry')]);
+        ctx.genAi.script.push(
+          [calls({ id: 'x', name: 'does_not_exist', args: {} })],
+          [text('sorry')],
+        );
 
         const frames = await stream(user.id, { characterId: character.id });
 
         expect(types(frames)).toEqual(['session', 'text', 'done']);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+        expect(
+          ctx.genAi.sendMessageStream.mock.calls[1][0].message[0]
+            .functionResponse.response,
+        ).toEqual({
           error: 'unknown tool: does_not_exist',
         });
       });
@@ -669,14 +914,23 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         ctx.genAi.script.push(
-          [calls({ id: 'x', name: 'create_financial_transaction', args: { amount: -5, unexpected: true } })],
+          [
+            calls({
+              id: 'x',
+              name: 'create_financial_transaction',
+              args: { amount: -5, unexpected: true },
+            }),
+          ],
           [text('sorry')],
         );
 
         const frames = await stream(user.id, { characterId: character.id });
 
         expect(types(frames)).toEqual(['session', 'text', 'done']);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toMatchObject({
+        expect(
+          ctx.genAi.sendMessageStream.mock.calls[1][0].message[0]
+            .functionResponse.response,
+        ).toMatchObject({
           error: 'invalid arguments',
         });
       });
@@ -687,25 +941,59 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         ctx.genAi.script.push(
-          [calls({ id: 'w1', name: 'create_financial_transaction', args: { accountId, amount: 50000, type: 'EXPENSE', note: 'lunch' } })],
+          [
+            calls({
+              id: 'w1',
+              name: 'create_financial_transaction',
+              args: {
+                accountId,
+                amount: 50000,
+                type: 'EXPENSE',
+                note: 'lunch',
+              },
+            }),
+          ],
           [text('Please confirm')],
         );
         const frames = await stream(user.id, { characterId: character.id });
-        const confirmation = frames.find((f) => f.type === 'confirmation_required')!;
+        const confirmation = frames.find(
+          (f) => f.type === 'confirmation_required',
+        )!;
         return { user, frames, confirmation };
       };
 
       it('emits confirmation_required with an actionId and writes nothing', async () => {
-        const account = await seedAccount(ctx.prisma, { cachedBalance: 1000000 });
+        const account = await seedAccount(ctx.prisma, {
+          cachedBalance: 1000000,
+        });
 
         const { frames, confirmation } = await proposeTransaction(account.id);
 
-        expect(types(frames)).toEqual(['session', 'confirmation_required', 'text', 'done']);
-        expect(confirmation).toMatchObject({ tool: 'create_financial_transaction', args: { accountId: account.id, amount: 50000 } });
+        expect(types(frames)).toEqual([
+          'session',
+          'confirmation_required',
+          'text',
+          'done',
+        ]);
+        expect(confirmation).toMatchObject({
+          tool: 'create_financial_transaction',
+          args: { accountId: account.id, amount: 50000 },
+        });
         expect(typeof confirmation.actionId).toBe('string');
         expect(await ctx.prisma.transaction.count()).toBe(0);
-        expect(Number((await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id: account.id } })).cachedBalance)).toBe(1000000);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+        expect(
+          Number(
+            (
+              await ctx.prisma.bankAccount.findUniqueOrThrow({
+                where: { id: account.id },
+              })
+            ).cachedBalance,
+          ),
+        ).toBe(1000000);
+        expect(
+          ctx.genAi.sendMessageStream.mock.calls[1][0].message[0]
+            .functionResponse.response,
+        ).toEqual({
           status: 'awaiting_user_confirmation',
         });
       });
@@ -715,49 +1003,87 @@ describe('chat integration', () => {
 
         const { frames, confirmation } = await proposeTransaction(account.id);
 
-        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
-        expect(model.toolCalls).toMatchObject([{ tool: 'create_financial_transaction', actionId: confirmation.actionId }]);
+        const model = (await messagesOf(frames[0].sessionId)).find(
+          (m) => m.role === 'MODEL',
+        )!;
+        expect(model.toolCalls).toMatchObject([
+          {
+            tool: 'create_financial_transaction',
+            actionId: confirmation.actionId,
+          },
+        ]);
       });
 
       it('confirmAction executes the stored command exactly once', async () => {
-        const account = await seedAccount(ctx.prisma, { cachedBalance: 1000000 });
+        const account = await seedAccount(ctx.prisma, {
+          cachedBalance: 1000000,
+        });
         const { confirmation } = await proposeTransaction(account.id);
 
         const result = await agent.confirmAction(confirmation.actionId);
 
         expect(result.tool).toBe('create_financial_transaction');
         expect(await ctx.prisma.transaction.count()).toBe(1);
-        expect(await ctx.prisma.transaction.findFirstOrThrow()).toMatchObject({ accountId: account.id, type: 'EXPENSE', note: 'lunch' });
-        expect(Number((await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id: account.id } })).cachedBalance)).toBe(950000);
+        expect(await ctx.prisma.transaction.findFirstOrThrow()).toMatchObject({
+          accountId: account.id,
+          type: 'EXPENSE',
+          note: 'lunch',
+        });
+        expect(
+          Number(
+            (
+              await ctx.prisma.bankAccount.findUniqueOrThrow({
+                where: { id: account.id },
+              })
+            ).cachedBalance,
+          ),
+        ).toBe(950000);
 
-        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          agent.confirmAction(confirmation.actionId),
+        ).rejects.toBeInstanceOf(NotFoundException);
         expect(await ctx.prisma.transaction.count()).toBe(1);
       });
 
       it('confirmAction surfaces a failing command and does not allow a retry', async () => {
         const account = await seedAccount(ctx.prisma);
         const { confirmation } = await proposeTransaction(account.id);
-        await ctx.prisma.bankAccount.update({ where: { id: account.id }, data: { isActive: false } });
+        await ctx.prisma.bankAccount.update({
+          where: { id: account.id },
+          data: { isActive: false },
+        });
 
-        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(BadRequestException);
+        await expect(
+          agent.confirmAction(confirmation.actionId),
+        ).rejects.toBeInstanceOf(BadRequestException);
 
         expect(await ctx.prisma.transaction.count()).toBe(0);
-        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          agent.confirmAction(confirmation.actionId),
+        ).rejects.toBeInstanceOf(NotFoundException);
       });
 
       it('discardAction drops the command; it cannot be confirmed afterwards', async () => {
         const account = await seedAccount(ctx.prisma);
         const { confirmation } = await proposeTransaction(account.id);
 
-        expect(agent.discardAction(confirmation.actionId)).toEqual({ success: true });
+        expect(agent.discardAction(confirmation.actionId)).toEqual({
+          success: true,
+        });
 
-        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          agent.confirmAction(confirmation.actionId),
+        ).rejects.toBeInstanceOf(NotFoundException);
         expect(await ctx.prisma.transaction.count()).toBe(0);
-        expect(() => agent.discardAction(confirmation.actionId)).toThrow(NotFoundException);
+        expect(() => agent.discardAction(confirmation.actionId)).toThrow(
+          NotFoundException,
+        );
       });
 
       it('rejects an unknown action id on confirm and discard', async () => {
-        await expect(agent.confirmAction(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(agent.confirmAction(MISSING)).rejects.toBeInstanceOf(
+          NotFoundException,
+        );
         expect(() => agent.discardAction(MISSING)).toThrow(NotFoundException);
       });
 
@@ -768,7 +1094,9 @@ describe('chat integration', () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1000);
 
-        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          agent.confirmAction(confirmation.actionId),
+        ).rejects.toBeInstanceOf(NotFoundException);
         expect(await ctx.prisma.transaction.count()).toBe(0);
       });
 
@@ -785,7 +1113,9 @@ describe('chat integration', () => {
     });
 
     describe('tool round limit', () => {
-      const readRound = () => [calls({ name: 'get_financial_summary', args: {} })];
+      const readRound = () => [
+        calls({ name: 'get_financial_summary', args: {} }),
+      ];
 
       it('stops after 5 tool rounds with an error frame and stores no model message', async () => {
         const user = await seedUser(ctx.prisma);
@@ -812,7 +1142,9 @@ describe('chat integration', () => {
 
         expect(frames.at(-1)).toEqual({ type: 'done' });
         expect(types(frames)).not.toContain('error');
-        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
+        const model = (await messagesOf(frames[0].sessionId)).find(
+          (m) => m.role === 'MODEL',
+        )!;
         expect(model.content).toBe('finally');
         expect(model.toolCalls).toHaveLength(5);
       });
@@ -824,12 +1156,17 @@ describe('chat integration', () => {
         const character = await withCharacter();
         ctx.genAi.sendMessageStream.mockRejectedValueOnce(httpError(500));
 
-        const frames = await stream(user.id, { characterId: character.id, message: 'are you there' });
+        const frames = await stream(user.id, {
+          characterId: character.id,
+          message: 'are you there',
+        });
 
         expect(types(frames)).toEqual(['session', 'error']);
         expect(frames[1].message).toBe('HTTP 500');
         const stored = await messagesOf(frames[0].sessionId);
-        expect(stored.map((m) => [m.role, m.content])).toEqual([['USER', 'are you there']]);
+        expect(stored.map((m) => [m.role, m.content])).toEqual([
+          ['USER', 'are you there'],
+        ]);
       });
 
       it('does not store a half answer when the stream breaks after some text', async () => {
@@ -856,18 +1193,27 @@ describe('chat integration', () => {
         const character = await withCharacter();
         let seenAtModelCall: string[] = [];
         ctx.genAi.sendMessageStream.mockImplementationOnce(async () => {
-          seenAtModelCall = (await ctx.prisma.chatMessage.findMany()).map((m) => `${m.role}:${m.content}`);
+          seenAtModelCall = (await ctx.prisma.chatMessage.findMany()).map(
+            (m) => `${m.role}:${m.content}`,
+          );
           return (async function* () {
             yield text('answer');
             // still no model message while the stream is open
-            seenAtModelCall.push(`open:${await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } })}`);
+            seenAtModelCall.push(
+              `open:${await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } })}`,
+            );
           })();
         });
 
-        await stream(user.id, { characterId: character.id, message: 'question' });
+        await stream(user.id, {
+          characterId: character.id,
+          message: 'question',
+        });
 
         expect(seenAtModelCall).toEqual(['USER:question', 'open:0']);
-        expect(await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } })).toBe(1);
+        expect(
+          await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } }),
+        ).toBe(1);
       });
     });
 
@@ -878,41 +1224,90 @@ describe('chat integration', () => {
         ctx.genAi.script.push(
           [
             calls(
-              { id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea', category: 'PREFERENCE' } },
-              { id: 'm2', name: 'save_user_memory', args: { content: 'user has a dog' } },
+              {
+                id: 'm1',
+                name: 'save_user_memory',
+                args: { content: 'user likes tea', category: 'PREFERENCE' },
+              },
+              {
+                id: 'm2',
+                name: 'save_user_memory',
+                args: { content: 'user has a dog' },
+              },
             ),
           ],
           [text('noted')],
         );
 
-        const frames = await stream(user.id, { characterId: character.id, message: 'I like tea and I have a dog' });
+        const frames = await stream(user.id, {
+          characterId: character.id,
+          message: 'I like tea and I have a dog',
+        });
 
-        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'tool_call', 'tool_result', 'text', 'done']);
-        const tea = await ctx.prisma.aiMemory.findFirstOrThrow({ where: { content: 'user likes tea' } });
-        const dog = await ctx.prisma.aiMemory.findFirstOrThrow({ where: { content: 'user has a dog' } });
+        expect(types(frames)).toEqual([
+          'session',
+          'tool_call',
+          'tool_result',
+          'tool_call',
+          'tool_result',
+          'text',
+          'done',
+        ]);
+        const tea = await ctx.prisma.aiMemory.findFirstOrThrow({
+          where: { content: 'user likes tea' },
+        });
+        const dog = await ctx.prisma.aiMemory.findFirstOrThrow({
+          where: { content: 'user has a dog' },
+        });
         expect(tea).toMatchObject({ source: 'CHAT', category: 'PREFERENCE' });
         expect(dog).toMatchObject({ source: 'CHAT', category: 'GENERAL' });
-        const linked = await ctx.prisma.chatMessage.findMany({ where: { memoryId: { not: null } } });
+        const linked = await ctx.prisma.chatMessage.findMany({
+          where: { memoryId: { not: null } },
+        });
         expect(linked).toHaveLength(1);
-        expect(linked[0]).toMatchObject({ role: 'USER', content: 'I like tea and I have a dog', memoryId: tea.id });
+        expect(linked[0]).toMatchObject({
+          role: 'USER',
+          content: 'I like tea and I have a dog',
+          memoryId: tea.id,
+        });
       });
 
       it('does not link anything when the memory could not be saved', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([calls({ id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea' } })], [text('hmm')]);
+        ctx.genAi.script.push(
+          [
+            calls({
+              id: 'm1',
+              name: 'save_user_memory',
+              args: { content: 'user likes tea' },
+            }),
+          ],
+          [text('hmm')],
+        );
         // pre-turn retrieval uses the first embedding call, the tool uses the second
-        ctx.genAi.embedContent.mockImplementationOnce(async () => ({ embeddings: [{ values: Array.from({ length: 1536 }, () => 0) }] }));
-        ctx.genAi.embedContent.mockRejectedValueOnce(new Error('embedding down'));
+        ctx.genAi.embedContent.mockImplementationOnce(async () => ({
+          embeddings: [{ values: Array.from({ length: 1536 }, () => 0) }],
+        }));
+        ctx.genAi.embedContent.mockRejectedValueOnce(
+          new Error('embedding down'),
+        );
 
         const frames = await stream(user.id, { characterId: character.id });
 
         expect(types(frames)).toEqual(['session', 'tool_call', 'text', 'done']);
-        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+        expect(
+          ctx.genAi.sendMessageStream.mock.calls[1][0].message[0]
+            .functionResponse.response,
+        ).toEqual({
           error: 'embedding down',
         });
         expect(await ctx.prisma.aiMemory.count()).toBe(0);
-        expect(await ctx.prisma.chatMessage.count({ where: { memoryId: { not: null } } })).toBe(0);
+        expect(
+          await ctx.prisma.chatMessage.count({
+            where: { memoryId: { not: null } },
+          }),
+        ).toBe(0);
       });
     });
 
@@ -927,18 +1322,27 @@ describe('chat integration', () => {
             yield text('second chunk');
           })(),
         );
-        const observable = await agent.chatStream(user.id, { message: 'hi', characterId: character.id } as ChatStreamDto);
+        const observable = await agent.chatStream(user.id, {
+          message: 'hi',
+          characterId: character.id,
+        } as ChatStreamDto);
         const received: any[] = [];
 
         // the session frame is emitted synchronously on subscribe; runChat only continues after an await
-        const subscription = observable.subscribe((event) => received.push(JSON.parse(event.data)));
+        const subscription = observable.subscribe((event) =>
+          received.push(JSON.parse(event.data)),
+        );
         subscription.unsubscribe();
         // wait for the whole turn to end, so a missing cancel guard would have stored a MODEL message by now
-        await (run.mock.results[0].value as Promise<unknown>).catch(() => undefined);
+        await (run.mock.results[0].value as Promise<unknown>).catch(
+          () => undefined,
+        );
 
         expect(received.map((f) => f.type)).toEqual(['session']);
         const session = await ctx.prisma.chatSession.findFirstOrThrow();
-        expect((await messagesOf(session.id)).map((m) => m.role)).toEqual(['USER']);
+        expect((await messagesOf(session.id)).map((m) => m.role)).toEqual([
+          'USER',
+        ]);
       });
     });
   });
