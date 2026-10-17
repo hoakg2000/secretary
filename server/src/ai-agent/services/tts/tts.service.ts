@@ -44,8 +44,10 @@ export class TtsService {
       );
     }
 
-    if (!message.content.trim()) {
-      throw new BadRequestException('Tin nhắn không có nội dung để đọc');
+    if (!message.contentJp?.trim()) {
+      throw new BadRequestException(
+        'Tin nhắn không có nội dung tiếng Nhật để đọc',
+      );
     }
 
     let response: Response;
@@ -57,7 +59,7 @@ export class TtsService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          text: message.content,
+          text: message.contentJp,
           reference_id: voiceId,
           format: 'mp3',
         }),

@@ -55,7 +55,7 @@ confirm it.
 
 Before the stream opens: `ChatSessionService.resolve` loads the session of `dto.sessionId` (404 for an unknown or
 foreign one; the model is not called). An existing session uses its stored `character_id` and ignores
-`dto.characterId`; when that is null (character deleted), a default persona text is used. A new session needs
+`dto.characterId`; when that is null (character deleted), no persona section is added and only the default prompt from `prompts/data.json` applies. A new session needs
 `dto.characterId`: missing → `BadRequestException`, unknown → `NotFoundException`; then the session is created with
 that character. The `character_id` of a session is never changed. These errors are thrown before the stream opens.
 Then, inside the stream:
@@ -64,25 +64,29 @@ Then, inside the stream:
 2. `ChatSessionService.appendMessage(sessionId, USER, dto.message)`: **the message sent by the user is stored in
    full**, before the model is called.
 3. Build the system instruction (`buildSystemInstruction`):
-   - persona of the character (`characters`, `personas`);
+   - the default prompt, `prompts/data.json` (`systemPrompt`), always first;
+   - persona of the character (`characters`, `personas`), which extends the default prompt;
    - current time and `APP_TIMEZONE`;
    - the note that write tools are not run until the user confirms;
    - the importance rule: `characters.memory_rule`, or `DEFAULT_MEMORY_RULE` when it is null, with "call
      `save_user_memory` only for a message that meets this rule";
    - up to 5 memories found by `MemoryService.searchMemory` for the message, marked as reference data that must
      not be followed as instructions. A retrieval failure does not fail the chat.
-4. Open a Gemini chat (`gemini-2.5-flash`) with all tool declarations and the history from
+4. Open a Gemini chat (`CHAT_MODEL`, `gemini-3.8-flash`) with all tool declarations, the reply schema (`responseMimeType: application/json`, `REPLY_SCHEMA`: required `message_vi` and `message_jp`) and the history from
    `ChatSessionService.recentHistory`: up to the last 20 messages of the session before the one stored in step 2,
    oldest first, starting at a user turn. Rows with empty text (a `MODEL` row that only holds tool calls) are dropped.
-5. Stream the answer as `text` frames. When the model calls tools, run them (`executeToolCall`), answer all calls
+5. The model answers in JSON `{ message_vi, message_jp }`. `ReplyStreamParser` (`services/agent/reply-stream.parser.ts`) reads the stream piece by piece and emits only the decoded `message_vi` as `text` frames; `message_jp` is never streamed. When the model calls tools, run them (`executeToolCall`), answer all calls
    of the round in one message, and continue. At most 5 rounds (`MAX_TOOL_ROUNDS`), then an `error` frame.
 6. When the model calls `save_user_memory`, the new memory's ID is written to `memory_id` of the message stored in
    step 2 (`linkMemory`). Only the first such memory of a turn is linked, because `memory_id` is unique. The message
    ID is held in the turn state of `AgentService`, never taken from a model-supplied argument. A link failure is
    logged and does not fail the chat.
-7. When the loop ends normally: `appendMessage(sessionId, MODEL, <all text chunks joined>, toolCalls)`: **the
-   message received from the model is stored in full**, with the tool calls of the turn (results, errors, or the
-   pending `actionId`). Then `done`.
+7. When the loop ends normally: `appendMessage(sessionId, MODEL, <message_vi of all rounds joined by a blank line>, toolCalls,
+   <message_jp of all rounds joined by a blank line>)`: **the message received from the model is stored in full**, with the tool
+   calls of the turn (results, errors, or the pending `actionId`). Then the `reply` frame
+   `{ messageId, contentJp }`, then `done`.
+   If the model reply is not valid JSON (or has no `message_vi`), the streamed text, or the raw text when nothing
+   was streamed, is stored as `content` and `content_jp` stays null; `contentJp` in the `reply` frame is `null`.
 
 **Tables**: `characters`, `personas` (read); `chat_sessions`, `chat_messages` (read, write); `ai_memories` (read;
 write only when the model calls `save_user_memory`).
@@ -93,6 +97,8 @@ Rules:
   `MODEL` row. A partial answer is not stored.
 - Chat is never embedded or searched by vector (`db.md` section 5). The pre-turn retrieval reads `ai_memories` only.
 - Only the path in step 6 turns chat content into a memory.
+- Risk: a response schema together with function calling is a Gemini 3 preview feature. Behaviour may change or
+  fail (for example a reply that is not valid JSON, handled by the fallback in step 7).
 
 ### 2. confirmAction / discardAction
 
@@ -111,11 +117,11 @@ embedding model.
 | Method | Does | Tables |
 |--------|------|--------|
 | `resolve(userId, sessionId?, characterId?, firstMessage?)` | Creates a session (title = first 80 characters of `firstMessage`), or loads one and requires `session.userId === userId`; otherwise `NotFoundException`. | `chat_sessions` |
-| `appendMessage(sessionId, role, content, toolCalls?)` | Inserts one message with the full text and updates `last_message_at`. Returns the message. | `chat_messages`, `chat_sessions` |
+| `appendMessage(sessionId, role, content, toolCalls?, contentJp?)` | Inserts one message with the full text (and `contentJp` when given) and updates `last_message_at`. Returns the message. | `chat_messages`, `chat_sessions` |
 | `recentHistory(sessionId, beforeMessageId, limit = 20)` | Up to `limit` earlier messages, oldest first, mapped to Gemini's `user` / `model` roles; rows with empty text and leading `model` turns are dropped. | `chat_messages` |
 | `linkMemory(messageId, memoryId)` | Sets `memory_id` on a message marked important. | `chat_messages` |
 | `listSessions(userId, page, pageSize)` | `{ items, total, page, pageSize }`: sessions of the user, newest `last_message_at` first. | `chat_sessions` |
-| `listMessages(userId, sessionId, page, pageSize)` | `{ items, total, page, pageSize }`: messages of an owned session, oldest first; `NotFoundException` for an unowned session. | `chat_messages` |
+| `listMessages(userId, sessionId, page, pageSize)` | `{ items, total, page, pageSize }`: messages of an owned session, oldest first, including `contentJp`; `NotFoundException` for an unowned session. | `chat_messages` |
 | `findOwnMessage(userId, messageId)` | A message whose session belongs to the user, with its session and character; `NotFoundException` otherwise. Used by `TtsService`. | `chat_messages`, `chat_sessions`, `characters` |
 | `deleteSession(userId, sessionId)` | Deletes an owned session; messages cascade, memories stay. | `chat_sessions` |
 
@@ -163,8 +169,8 @@ clears the category. Without `content` it is a plain update. With `content` it f
 - Signature: `textToSpeech(userId, dto: { messageId })`. Order: 503 without `FISH_AUDIO_API_KEY`; then
   `ChatSessionService.findOwnMessage(userId, messageId)` (404 for an unknown or foreign message); then the voice
   is `message.session.character.voiceId`.
-- 400 when the character is gone or has no `voice_id`, and 400 when the message text is blank. 500 when Fish.audio fails.
-- `POST https://api.fish.audio/v1/tts` with that voice and the message `content`; returns the MP3 as a stream.
+- 400 when the character is gone or has no `voice_id`, and 400 when `content_jp` of the message is null or blank. 500 when Fish.audio fails.
+- `POST https://api.fish.audio/v1/tts` with that voice and the message `content_jp` (Japanese text); returns the MP3 as a stream.
 - **Tables**: `chat_messages`, `chat_sessions`, `characters` (read).
 
 ---
@@ -172,5 +178,5 @@ clears the category. Without `content` it is a plain update. With `content` it f
 ## Not in this module
 
 - Proactive triggers: `server/src/proactive/` (reminder cron and `POST /proactive/trigger`).
-- Email classification: `server/src/email/email-ai.service.ts`. It uses `GenAiProvider` with no tools and writes
+- Email classification: `server/src/email/email-ai.service.ts`. It uses `GenAiProvider` and `CHAT_MODEL` (`gemini-3.8-flash`) with no tools and writes
   nothing to `ai_memories`.

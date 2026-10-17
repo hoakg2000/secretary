@@ -21,7 +21,9 @@ import { ChatStreamDto } from '../../dto/chat-stream.dto';
 import { GenAiProvider } from '../../genai.provider';
 import { ChatSessionService } from '../chat/chat-session.service';
 import { MemoryService } from '../memory/memory.service';
+import defaultPrompt from '../../prompts/data.json';
 import { PendingActionStore } from './pending-action.store';
+import { ReplyStreamParser } from './reply-stream.parser';
 
 interface DiscoveredTool {
   definition: FunctionDeclaration;
@@ -41,6 +43,7 @@ type ChatCharacter = Prisma.CharacterGetPayload<{
 interface ChatTurn {
   userMessageId: string;
   text: string;
+  textJp: string;
   toolCalls: Record<string, unknown>[];
   memoryLinked: boolean;
 }
@@ -48,7 +51,17 @@ interface ChatTurn {
 /** Số vòng gọi tool tối đa cho một tin nhắn của người dùng */
 export const MAX_TOOL_ROUNDS = 5;
 
-export const CHAT_MODEL = 'gemini-2.5-flash';
+export const CHAT_MODEL = 'gemini-3.8-flash';
+
+/** Schema câu trả lời của model: bản tiếng Việt hiển thị + bản tiếng Nhật để đọc TTS */
+export const REPLY_SCHEMA = {
+  type: 'object',
+  properties: {
+    message_vi: { type: 'string' },
+    message_jp: { type: 'string' },
+  },
+  required: ['message_vi', 'message_jp'],
+};
 
 /** Quy tắc chọn tin nhắn đáng nhớ khi Character không cấu hình memoryRule (D20) */
 export const DEFAULT_MEMORY_RULE =
@@ -56,6 +69,9 @@ export const DEFAULT_MEMORY_RULE =
 
 // Kết quả tool có thể chứa Decimal/Date: đưa về JSON thuần trước khi gửi cho model và client
 const toPlain = (value: unknown) => JSON.parse(JSON.stringify(value ?? null));
+
+// Mỗi vòng là một câu trả lời trọn vẹn: tách đoạn để không dính câu (cả khi TTS đọc)
+const joinRounds = (a: string, b: string) => (a && b ? `${a}\n\n${b}` : a + b);
 
 @Injectable()
 export class AgentService implements OnModuleInit {
@@ -152,12 +168,10 @@ export class AgentService implements OnModuleInit {
   }
 
   /**
-   * Persona / System Prompt của Character
+   * Persona của Character, bổ sung cho prompt mặc định; rỗng nếu không có
    */
   private getPersonaPrompt(character: ChatCharacter | null): string {
-    if (!character || character.personas.length === 0) {
-      return 'Bạn là một Trợ lý AI cá nhân hóa thông minh, lịch sự và chu đáo.';
-    }
+    if (!character || character.personas.length === 0) return '';
 
     const personaTexts = character.personas
       .map((p) => `[${p.type}]: ${p.value}`)
@@ -167,13 +181,15 @@ export class AgentService implements OnModuleInit {
   }
 
   /**
-   * System instruction = persona + thời gian hiện tại + quy tắc ghi nhớ + các ký ức liên quan tới tin nhắn
+   * System instruction = prompt mặc định + persona + thời gian hiện tại + quy tắc ghi nhớ + các ký ức liên quan tới tin nhắn
    */
   private async buildSystemInstruction(
     dto: ChatStreamDto,
     character: ChatCharacter | null,
   ): Promise<string> {
-    const sections = [this.getPersonaPrompt(character)];
+    const sections = [defaultPrompt.systemPrompt];
+    const persona = this.getPersonaPrompt(character);
+    if (persona) sections.push(persona);
 
     const timeZone = this.configService.get<string>(
       'APP_TIMEZONE',
@@ -295,6 +311,7 @@ export class AgentService implements OnModuleInit {
     const turn: ChatTurn = {
       userMessageId: userMessage.id,
       text: '',
+      textJp: '',
       toolCalls: [],
       memoryLinked: false,
     };
@@ -311,6 +328,8 @@ export class AgentService implements OnModuleInit {
           functionDeclarations.length > 0
             ? [{ functionDeclarations }]
             : undefined,
+        responseMimeType: 'application/json',
+        responseJsonSchema: REPLY_SCHEMA,
       },
       history: await this.chatSessions.recentHistory(sessionId, userMessage.id),
     });
@@ -320,6 +339,9 @@ export class AgentService implements OnModuleInit {
     // Vòng lặp ReAct / Tool Calling, có giới hạn số vòng
     for (let round = 0; ; round++) {
       const calls: FunctionCall[] = [];
+      const parser = new ReplyStreamParser();
+      let raw = '';
+      let streamedVi = '';
 
       const stream = await chat.sendMessageStream({ message });
       for await (const chunk of stream) {
@@ -330,9 +352,33 @@ export class AgentService implements OnModuleInit {
           ?.map((part) => (part.thought ? '' : (part.text ?? '')))
           .join('');
         if (text) {
-          turn.text += text;
-          emit({ type: 'text', content: text });
+          raw += text;
+          const vi = parser.feed(text);
+          if (vi) {
+            streamedVi += vi;
+            emit({ type: 'text', content: vi });
+          }
         }
+      }
+
+      if (raw) {
+        let reply: { message_vi?: unknown; message_jp?: unknown } | null = null;
+        try {
+          reply = JSON.parse(raw);
+        } catch (error: any) {
+          this.logger.warn(
+            `Câu trả lời của model không phải JSON hợp lệ: ${error.message}`,
+          );
+        }
+        // JSON hợp lệ nhưng thiếu message_vi: không hiển thị/lưu JSON thô (có lẫn tiếng Nhật)
+        const vi =
+          typeof reply?.message_vi === 'string'
+            ? reply.message_vi
+            : streamedVi || (reply ? '' : raw);
+        if (!reply && !streamedVi) emit({ type: 'text', content: raw });
+        turn.text = joinRounds(turn.text, vi);
+        if (typeof reply?.message_jp === 'string')
+          turn.textJp = joinRounds(turn.textJp, reply.message_jp);
       }
 
       if (calls.length === 0) break;
@@ -360,14 +406,16 @@ export class AgentService implements OnModuleInit {
 
     // Lượt lỗi hoặc bị client hủy không lưu câu trả lời dở dang
     if (isCancelled()) return;
-    await this.chatSessions.appendMessage(
+    const saved = await this.chatSessions.appendMessage(
       sessionId,
       ChatRole.MODEL,
       turn.text,
       turn.toolCalls.length > 0
         ? (turn.toolCalls as Prisma.InputJsonValue)
         : undefined,
+      turn.textJp || undefined,
     );
+    emit({ type: 'reply', messageId: saved.id, contentJp: saved.contentJp });
   }
 
   /**

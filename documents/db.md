@@ -183,7 +183,7 @@ Rules:
 
 1. Chat sessions and messages live in these two relational tables. They are **never** stored in the vector store:
    no `vector` column, no `tsvector` column, no embedding computed for a message as such.
-2. `chat_messages.content` holds the **full** message, both what the user sent and what the model answered.
+2. `chat_messages.content` holds the **full** message, both what the user sent and what the model answered (Vietnamese). `chat_messages.content_jp` holds the Japanese text of a model answer; TTS reads it.
 3. Only a message the AI marks important, by the rule configured on the character (`characters.memory_rule`),
    produces a row in `ai_memories`. `chat_messages.memory_id` points to it.
 4. The history of a turn is read from `chat_messages`: up to the last 20 earlier messages of the session. Rows with
@@ -210,6 +210,7 @@ Index: `(user_id, last_message_at)`.
 | `session_id` | FK `chat_sessions.id`, cascade | |
 | `role` | enum `ChatRole` | `USER` (sent by the user), `MODEL` (received from the model). |
 | `content` | text | The full message text. Not truncated. |
+| `content_jp` | text, null | On a `MODEL` row: the Japanese text of the reply (`message_jp`), read by TTS. Null on `USER` rows and on `MODEL` rows written before the column existed (also when the model reply was not valid JSON). |
 | `tool_calls` | JSON, null | On a `MODEL` row: the tool calls of the turn with their results, or the pending `actionId` of a write that awaits confirmation. Not replayed to the model. |
 | `memory_id` | FK `ai_memories.id`, set null, null, unique | Set when this message was marked important. Null for every other message. |
 | `created_at` | timestamp | |
@@ -218,7 +219,7 @@ Index: `(session_id, created_at)`.
 
 Deleting a session deletes its messages. Memories made from them stay: the foreign key is on the message side.
 
-Migration: `20261013130000_chat_sessions_messages`.
+Migrations: `20261013130000_chat_sessions_messages`; `20261017120000_add_chat_message_content_jp` (adds `content_jp`).
 
 ---
 

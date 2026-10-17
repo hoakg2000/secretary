@@ -7,6 +7,17 @@ export const httpError = (status: number) =>
 export const text = (value: string) => ({
   candidates: [{ content: { parts: [{ text: value }] } }],
 });
+
+/** The JSON text the model returns for a chat round */
+export const replyJson = (vi: string, jp: string) => JSON.stringify({ message_vi: vi, message_jp: jp });
+/** Raw text cut into stream chunks of `size` code units (may cut inside an escape on purpose) */
+export const chunkBySize = (raw: string, size: number) =>
+  Array.from({ length: Math.ceil(raw.length / size) }, (_, i) => text(raw.slice(i * size, (i + 1) * size)));
+/** Raw text cut into stream chunks at the given indexes */
+export const chunkAt = (raw: string, ...cuts: number[]) =>
+  [0, ...cuts].map((from, i) => text(raw.slice(from, cuts[i] ?? raw.length)));
+/** One model round: a single chunk with the JSON reply */
+export const reply = (vi: string, jp = 'jp') => [text(replyJson(vi, jp))];
 export const calls = (...functionCalls: any[]) => ({ functionCalls });
 
 /** generateContent answer for EmailAiService: the model replies with a JSON string in `text` */

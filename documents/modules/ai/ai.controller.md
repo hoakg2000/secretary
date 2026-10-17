@@ -43,11 +43,12 @@ keeps the `USER` row and stores no `MODEL` row. Steps: `ai.service.md` (`chatStr
 | `type` | Fields | Meaning |
 |--------|--------|---------|
 | `session` | `sessionId` | First frame of every stream. |
-| `text` | `content` | A chunk of the answer. |
+| `text` | `content` | A chunk of the Vietnamese answer (`message_vi` only). |
 | `tool_call` | `tool`, `args` | A read tool is running. |
 | `tool_result` | `tool`, `result` | Its result. |
 | `confirmation_required` | `actionId`, `tool`, `args` | A write tool was proposed and **not run**. |
 | `error` | `message` | The stream stops (includes the 5-round tool limit). |
+| `reply` | `messageId`, `contentJp` | Sent once, after the `MODEL` message is stored and before `done`. `messageId` is the ID to send to TTS. `contentJp` is the Japanese text of the answer, or `null` when the model reply was not valid JSON. Not sent after an `error` or an abort. |
 | `done` | — | Normal end. |
 
 ---
@@ -112,7 +113,7 @@ Neither route rewrites the stored `MODEL` message of the turn that proposed the 
 
 - **Handler**: `listMessages(req.user.userId, id, dto.page, dto.pageSize)` → `ChatSessionService.listMessages`
 - **Query** `ListChatDto`.
-- **Response `data`**: `{ items, total, page, pageSize }`; messages oldest first, full rows: `id`, `sessionId`, `role` (`USER` / `MODEL`), `content` (full text), `toolCalls`,
+- **Response `data`**: `{ items, total, page, pageSize }`; messages oldest first, full rows: `id`, `sessionId`, `role` (`USER` / `MODEL`), `content` (full text; Vietnamese on a `MODEL` row), `contentJp` (Japanese text of a `MODEL` reply; null on `USER` rows and on `MODEL` rows written before the column existed), `toolCalls`,
   `memoryId` (non-null when the message was marked important), `createdAt`.
 - 404 when the session does not exist or belongs to another user.
 
@@ -128,8 +129,8 @@ Neither route rewrites the stored `MODEL` message of the turn that proposed the 
 
 - **Handler**: `textToSpeech(req.user.userId, dto, res)` → `TtsService.textToSpeech`
 - **Request** `TtsRequestDto`: `messageId` (UUID, required), the ID of a stored chat message. The voice is the
-  `voice_id` of the character of the message's session; the text is the message's `content`.
+  `voice_id` of the character of the message's session; the text read aloud is the message's `content_jp`.
 - **Response**: an MP3 stream (`audio/mpeg`), not the JSON envelope.
 - 503 without `FISH_AUDIO_API_KEY` (checked first); 404 when the message does not exist or belongs to another user;
-  400 when the session has no character (deleted) or the character has no `voice_id`, or when the message text is
-  blank; 500 when Fish.audio fails.
+  400 when the session has no character (deleted) or the character has no `voice_id`, or when the message has no Japanese
+  text (`content_jp` null or blank); 500 when Fish.audio fails.

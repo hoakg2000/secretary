@@ -120,7 +120,7 @@ export class AiAgentController {
   @ApiOperation({
     summary: 'Chat tương tác thời gian thực với AI Agent (SSE Stream qua POST)',
     description:
-      'Các frame `data:` là JSON có `type`: session | text | tool_call | tool_result | confirmation_required | error | done. Frame đầu tiên luôn là `session` (chứa `sessionId`).',
+      'Các frame `data:` là JSON có `type`: session | text | tool_call | tool_result | confirmation_required | reply | error | done. Frame đầu tiên luôn là `session` (chứa `sessionId`). Frame `text` chứa dần phần tiếng Việt (`content`). Frame `reply` (`messageId`, `contentJp`) được gửi sau khi lưu tin nhắn, ngay trước `done`; `contentJp` là bản tiếng Nhật dùng cho TTS (có thể null).',
   })
   @ApiResponse({
     status: 200,
@@ -251,7 +251,8 @@ export class AiAgentController {
   @ApiResponse({ status: 200, description: 'Chuyển đổi TTS thành công' })
   @ApiResponse({
     status: 400,
-    description: 'Character của phiên chat chưa có voiceId',
+    description:
+      'Character của phiên chat chưa có voiceId, hoặc tin nhắn không có nội dung tiếng Nhật để đọc',
   })
   @ApiResponse({ status: 404, description: 'Không tìm thấy tin nhắn' })
   @ApiResponse({ status: 503, description: 'Dịch vụ TTS chưa được cấu hình' })

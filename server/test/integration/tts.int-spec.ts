@@ -22,22 +22,22 @@ describe('tts integration (Fish.audio answers through the fetch stub)', () => {
   });
 
   const seedMessage = async (
-    options: { voiceId?: string | null; content?: string; character?: boolean; userId?: string } = {},
+    options: { voiceId?: string | null; content?: string; contentJp?: string | null; role?: ChatRole; character?: boolean; userId?: string } = {},
   ) => {
-    const { voiceId = 'voice-42', content = 'Xin chào bạn', character = true } = options;
+    const { voiceId = 'voice-42', content = 'Xin chào bạn', contentJp = 'こんにちは', role = ChatRole.MODEL, character = true } = options;
     const user = options.userId ? { id: options.userId } : await seedUser(ctx.prisma);
     const characterRow = character ? await seedCharacter(ctx.prisma, { voiceId }) : null;
     const session = await ctx.prisma.chatSession.create({
       data: { userId: user.id, characterId: characterRow?.id },
     });
     const message = await ctx.prisma.chatMessage.create({
-      data: { sessionId: session.id, role: ChatRole.MODEL, content },
+      data: { sessionId: session.id, role, content, contentJp },
     });
     return { user, message, character: characterRow };
   };
 
-  it('calls Fish.audio with the message text, the character voice and mp3, and returns a readable stream', async () => {
-    const { user, message } = await seedMessage({ voiceId: 'voice-42', content: 'Xin chào bạn' });
+  it('calls Fish.audio with the Japanese text, the character voice and mp3, and returns a readable stream', async () => {
+    const { user, message } = await seedMessage({ voiceId: 'voice-42', content: 'Xin chào bạn', contentJp: 'こんにちは、あなた' });
 
     const result = await tts.textToSpeech(user.id, { messageId: message.id });
 
@@ -47,7 +47,7 @@ describe('tts integration (Fish.audio answers through the fetch stub)', () => {
     expect(call.method).toBe('POST');
     expect(call.headers.authorization).toBe('Bearer test');
     expect(call.headers['content-type']).toBe('application/json');
-    expect(call.json).toEqual({ text: 'Xin chào bạn', reference_id: 'voice-42', format: 'mp3' });
+    expect(call.json).toEqual({ text: 'こんにちは、あなた', reference_id: 'voice-42', format: 'mp3' });
     const bytes = new Uint8Array(await new Response(result).arrayBuffer());
     expect([...bytes]).toEqual([1, 2, 3]);
   });
@@ -83,6 +83,22 @@ describe('tts integration (Fish.audio answers through the fetch stub)', () => {
   });
 
   describe('request validation', () => {
+    it('returns 400 for a user message, which has no Japanese text', async () => {
+      const { user, message } = await seedMessage({ role: ChatRole.USER, contentJp: null });
+
+      await expect(tts.textToSpeech(user.id, { messageId: message.id })).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(ctx.http.callsTo(FISH)).toHaveLength(0);
+    });
+
+    it('does not send the Vietnamese text even when it is present', async () => {
+      const { user, message } = await seedMessage({ content: 'chỉ tiếng Việt', contentJp: '日本語' });
+
+      await tts.textToSpeech(user.id, { messageId: message.id });
+
+      expect(ctx.http.callsTo(FISH)[0].json.text).toBe('日本語');
+    });
+
     it('returns 400 when the character has no voice', async () => {
       const { user, message } = await seedMessage({ voiceId: null });
 
@@ -108,8 +124,8 @@ describe('tts integration (Fish.audio answers through the fetch stub)', () => {
       expect(ctx.http.callsTo(FISH)).toHaveLength(0);
     });
 
-    it.each(['', '   ', '\n\t'])('returns 400 for blank content %j', async (content) => {
-      const { user, message } = await seedMessage({ content });
+    it.each([null, '', '   ', '\n\t'])('returns 400 for missing or blank Japanese text %j', async (contentJp) => {
+      const { user, message } = await seedMessage({ contentJp });
 
       await expect(tts.textToSpeech(user.id, { messageId: message.id })).rejects.toBeInstanceOf(BadRequestException);
 

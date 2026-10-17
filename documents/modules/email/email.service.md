@@ -99,7 +99,7 @@ Not an AI tool in any method.
 
 ## EmailAiService
 
-- `classify(email, ruleType)`: one `generateContent` call (`CHAT_MODEL`, `gemini-2.5-flash`) with a JSON response
+- `classify(email, ruleType)`: one `generateContent` call (`CHAT_MODEL`, `gemini-3.8-flash`) with a JSON response
   schema and **no tools**. The email is the only untrusted input: it is wrapped between random-ID boundary lines, the
   body is cut at 20 000 characters, and the system instruction tells the model to describe, never follow, its content.
 - The rule type only selects the task text: `moneylist` (expect a bank notice), `whitelist` (important sender, judge

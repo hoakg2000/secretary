@@ -2,14 +2,20 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ChatRole } from '@prisma/client';
 import { lastValueFrom, toArray } from 'rxjs';
 import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
-import { AgentService, DEFAULT_MEMORY_RULE } from '../../src/ai-agent/services/agent/agent.service';
+import prompt from '../../src/ai-agent/prompts/data.json';
+import { ReplyStreamParser } from '../../src/ai-agent/services/agent/reply-stream.parser';
+import { AgentService, CHAT_MODEL, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
 import { ChatSessionService } from '../../src/ai-agent/services/chat/chat-session.service';
 import { MemoryService } from '../../src/ai-agent/services/memory/memory.service';
 import {
   MISSING,
   calls,
+  chunkAt,
+  chunkBySize,
   createTestModule,
   rejection,
+  reply,
+  replyJson,
   httpError,
   resetState,
   seedAccount,
@@ -113,6 +119,17 @@ describe('chat integration', () => {
         });
         const after = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
         expect(after.lastMessageAt.getTime()).toBeGreaterThan(old.getTime() + 86_400_000);
+      });
+
+      it('stores the Japanese text when given and null otherwise', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+
+        const withJp = await sessions.appendMessage(session.id, ChatRole.MODEL, 'xin chao', undefined, 'konnichiwa');
+        const without = await sessions.appendMessage(session.id, ChatRole.MODEL, 'xin chao');
+
+        expect((await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: withJp.id } })).contentJp).toBe('konnichiwa');
+        expect((await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: without.id } })).contentJp).toBeNull();
       });
 
       it('stores no tool calls when none are given', async () => {
@@ -369,6 +386,11 @@ describe('chat integration', () => {
       const events = await lastValueFrom(observable.pipe(toArray()));
       return events.map((e) => JSON.parse(e.data) as { type: string; [key: string]: any });
     };
+    const textOf = (frames: { type: string; content?: string }[]) =>
+      frames
+        .filter((f) => f.type === 'text')
+        .map((f) => f.content)
+        .join('');
     const types = (frames: { type: string }[]) => frames.map((f) => f.type);
     const instructionOf = (callIndex = 0) => ctx.genAi.create.mock.calls[callIndex][0].config.systemInstruction as string;
     const withCharacter = (data: Record<string, unknown> = {}) =>
@@ -385,12 +407,14 @@ describe('chat integration', () => {
       it('emits the session frame first, then text, then done, and persists both messages', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([text('Hi '), text('there')]);
+        ctx.genAi.script.push(chunkBySize(replyJson('Hi there', 'jp'), 18));
 
         const frames = await stream(user.id, { message: 'hello bot', characterId: character.id });
 
-        expect(types(frames)).toEqual(['session', 'text', 'text', 'done']);
-        expect(frames.filter((f) => f.type === 'text').map((f) => f.content)).toEqual(['Hi ', 'there']);
+        expect(types(frames)[0]).toBe('session');
+        expect(types(frames).filter((t) => t === 'text').length).toBeGreaterThan(1);
+        expect(types(frames).slice(-2)).toEqual(['reply', 'done']);
+        expect(textOf(frames)).toBe('Hi there');
         const session = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: frames[0].sessionId } });
         expect(session).toMatchObject({ userId: user.id, characterId: character.id, title: 'hello bot' });
         const stored = await messagesOf(session.id);
@@ -447,7 +471,7 @@ describe('chat integration', () => {
         const stored = await withCharacter({ name: 'StoredName' });
         const other = await withCharacter({ name: 'OtherName' });
         const session = await makeSession(user.id, { characterId: stored.id });
-        ctx.genAi.script.push([text('ok')]);
+        ctx.genAi.script.push(reply('ok'));
 
         const frames = await stream(user.id, { sessionId: session.id, characterId: other.id });
 
@@ -460,11 +484,11 @@ describe('chat integration', () => {
       it('continues an existing session without characterId in the request', async () => {
         const user = await seedUser(ctx.prisma);
         const session = await makeSession(user.id);
-        ctx.genAi.script.push([text('ok')]);
+        ctx.genAi.script.push(reply('ok'));
 
         const frames = await stream(user.id, { sessionId: session.id });
 
-        expect(types(frames)).toEqual(['session', 'text', 'done']);
+        expect(types(frames)).toEqual(['session', 'text', 'reply', 'done']);
       });
 
       it('passes the earlier messages of the session as history', async () => {
@@ -472,7 +496,7 @@ describe('chat integration', () => {
         const session = await makeSession(user.id);
         await makeMessage(session.id, 0, ChatRole.USER, 'earlier question');
         await makeMessage(session.id, 1, ChatRole.MODEL, 'earlier answer');
-        ctx.genAi.script.push([text('ok')]);
+        ctx.genAi.script.push(reply('ok'));
 
         await stream(user.id, { sessionId: session.id, message: 'follow up' });
 
@@ -510,6 +534,17 @@ describe('chat integration', () => {
         expect(instruction).not.toContain(DEFAULT_MEMORY_RULE);
       });
 
+      it('starts with the default system prompt and puts the persona text after it', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+
+        await stream(user.id, { characterId: character.id });
+
+        const instruction = instructionOf();
+        expect(instruction.startsWith(prompt.systemPrompt)).toBe(true);
+        expect(instruction.indexOf('Tên nhân vật: Mika')).toBeGreaterThanOrEqual(prompt.systemPrompt.length);
+      });
+
       it('uses the default memory rule when the character has none', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter({ memoryRule: null });
@@ -525,7 +560,7 @@ describe('chat integration', () => {
 
         await stream(user.id, { characterId: character.id });
 
-        expect(instructionOf()).toContain('Bạn là một Trợ lý AI cá nhân hóa');
+        expect(instructionOf().startsWith(prompt.systemPrompt)).toBe(true);
         expect(instructionOf()).not.toContain('Tên nhân vật');
       });
 
@@ -537,7 +572,7 @@ describe('chat integration', () => {
 
         const frames = await stream(user.id, { sessionId: session.id });
 
-        expect(types(frames)).toEqual(['session', 'done']);
+        expect(types(frames)).toEqual(['session', 'reply', 'done']);
         expect(instructionOf()).toContain('Bạn là một Trợ lý AI cá nhân hóa');
         expect(instructionOf()).not.toContain('Mika');
         expect(instructionOf()).toContain(DEFAULT_MEMORY_RULE);
@@ -598,8 +633,138 @@ describe('chat integration', () => {
 
         const frames = await stream(user.id, { characterId: character.id });
 
-        expect(types(frames)).toEqual(['session', 'done']);
+        expect(types(frames)).toEqual(['session', 'reply', 'done']);
         expect(instructionOf()).not.toContain('Ghi chú đã nhớ');
+      });
+    });
+
+    describe('bilingual JSON reply', () => {
+      const run = async (script: any[]) => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push(script);
+        const frames = await stream(user.id, { characterId: character.id });
+        const modelRow = await ctx.prisma.chatMessage.findFirst({ where: { role: 'MODEL' } });
+        return { frames, modelRow };
+      };
+
+      it('configures the chat with the JSON schema, the chat model and the tools', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+
+        await stream(user.id, { characterId: character.id });
+
+        const params = ctx.genAi.create.mock.calls[0][0];
+        expect(params.model).toBe(CHAT_MODEL);
+        expect(params.config.responseMimeType).toBe('application/json');
+        expect(params.config.responseJsonSchema).toEqual(REPLY_SCHEMA);
+        expect(params.config.tools[0].functionDeclarations.length).toBeGreaterThan(0);
+      });
+
+      // escaped quotes, a backslash, ạ and an emoji written as a surrogate pair of escapes
+      const viEscaped = String.raw`Xin \"chào\" b\u1ea1n \ud83d\ude00 \\ ok`;
+      const viDecoded = 'Xin "chào" bạn 😀 \\ ok';
+      const raw = `{"message_vi":"${viEscaped}","message_jp":"こんにちは\\n世界"}`;
+
+      it.each([1, 2, 3, 5, 7, 11, 1000])(
+        'streams exactly message_vi and stores both texts when the reply is cut into %i-character chunks',
+        async (size) => {
+          const { frames, modelRow } = await run(chunkBySize(raw, size));
+
+          expect(textOf(frames)).toBe(viDecoded);
+          expect(modelRow).toMatchObject({ content: viDecoded, contentJp: 'こんにちは\n世界' });
+          const replyFrame = frames.find((f) => f.type === 'reply')!;
+          expect(replyFrame).toEqual({ type: 'reply', messageId: modelRow!.id, contentJp: 'こんにちは\n世界' });
+          expect(types(frames).indexOf('reply')).toBeLessThan(types(frames).indexOf('done'));
+          expect(types(frames).at(-1)).toBe('done');
+        },
+      );
+
+      it('survives cuts inside an escaped quote, inside a \\u escape and between the two surrogates', async () => {
+        const cuts = [
+          raw.indexOf('\\"') + 1, // between backslash and quote
+          raw.indexOf('\\u1ea1') + 3, // inside ạ
+          raw.indexOf('\\ude00'), // between the surrogate escapes
+          raw.indexOf('\\ude00') + 4,
+        ].sort((a, b) => a - b);
+        expect(cuts[0]).toBeGreaterThan(0);
+
+        const { frames, modelRow } = await run(chunkAt(raw, ...cuts));
+
+        expect(textOf(frames)).toBe(viDecoded);
+        // contentJp proves the JSON parsed, not the fallback path
+        expect(modelRow).toMatchObject({ content: viDecoded, contentJp: 'こんにちは\n世界' });
+      });
+
+      it('streams only message_vi when message_jp comes first', async () => {
+        const jpFirst = JSON.stringify({ message_jp: 'JP ONLY', message_vi: 'chỉ tiếng Việt' });
+
+        const { frames, modelRow } = await run(chunkBySize(jpFirst, 4));
+
+        expect(textOf(frames)).toBe('chỉ tiếng Việt');
+        expect(modelRow).toMatchObject({ content: 'chỉ tiếng Việt', contentJp: 'JP ONLY' });
+      });
+
+      it('completes the turn with the raw text and no Japanese when the reply is not valid JSON', async () => {
+        const { frames, modelRow } = await run([text('just plain text, no json')]);
+
+        expect(types(frames)).not.toContain('error');
+        expect(types(frames).at(-1)).toBe('done');
+        expect(textOf(frames)).toBe('just plain text, no json');
+        expect(modelRow).toMatchObject({ content: 'just plain text, no json', contentJp: null });
+        expect(frames.find((f) => f.type === 'reply')).toEqual({ type: 'reply', messageId: modelRow!.id, contentJp: null });
+      });
+
+      it('never shows or stores the raw JSON when it parses but has no message_vi', async () => {
+        const { frames, modelRow } = await run([text('{"message_jp":"日本語だけ"}')]);
+
+        expect(textOf(frames)).toBe('');
+        expect(modelRow).toMatchObject({ content: '', contentJp: '日本語だけ' });
+      });
+
+      it('separates the replies of two rounds with a blank line', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push(
+          [text(replyJson('Để mình kiểm tra.', '確認します。')), calls({ id: 'c1', name: 'get_financial_summary', args: {} })],
+          [text(replyJson('Có tiền', 'お金があります'))],
+        );
+
+        await stream(user.id, { characterId: character.id });
+
+        const modelRow = await ctx.prisma.chatMessage.findFirstOrThrow({ where: { role: 'MODEL' } });
+        expect(modelRow).toMatchObject({
+          content: 'Để mình kiểm tra.\n\nCó tiền',
+          contentJp: '確認します。\n\nお金があります',
+        });
+      });
+
+      it('keeps the already streamed Vietnamese when the JSON is cut off', async () => {
+        const { frames, modelRow } = await run([text('{"message_vi":"half an ans'), text('wer", "message_jp": "oops')]);
+
+        expect(types(frames)).not.toContain('error');
+        expect(textOf(frames)).toBe('half an answer');
+        expect(modelRow).toMatchObject({ content: 'half an answer', contentJp: null });
+      });
+
+      it('runs a tool round and then saves the JSON reply of the next round', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push([calls({ id: 'c1', name: 'get_financial_summary', args: {} })], chunkBySize(replyJson('Có tiền', 'お金があります'), 20));
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames).filter((t) => t !== 'text')).toEqual(['session', 'tool_call', 'tool_result', 'reply', 'done']);
+        expect(textOf(frames)).toBe('Có tiền');
+        const modelRow = await ctx.prisma.chatMessage.findFirstOrThrow({ where: { role: 'MODEL' } });
+        expect(modelRow).toMatchObject({ content: 'Có tiền', contentJp: 'お金があります' });
+        expect(modelRow.toolCalls).toMatchObject([{ tool: 'get_financial_summary' }]);
+      });
+
+      it('stores a blank Japanese text as null', async () => {
+        const { modelRow } = await run(reply('chỉ tiếng Việt', ''));
+
+        expect(modelRow).toMatchObject({ content: 'chỉ tiếng Việt', contentJp: null });
       });
     });
 
@@ -608,11 +773,11 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         await seedAccount(ctx.prisma, { accountName: 'Savings', cachedBalance: 1234567 });
-        ctx.genAi.script.push([calls({ id: 'c1', name: 'get_financial_summary', args: {} })], [text('You have money')]);
+        ctx.genAi.script.push([calls({ id: 'c1', name: 'get_financial_summary', args: {} })], reply('You have money'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
-        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'text', 'done']);
+        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'text', 'reply', 'done']);
         expect(frames[1]).toMatchObject({ tool: 'get_financial_summary' });
         const result = frames[2].result;
         expect(result.accounts).toHaveLength(1);
@@ -629,7 +794,7 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         await seedAccount(ctx.prisma);
-        ctx.genAi.script.push([calls({ name: 'get_financial_summary', args: {} })], [text('done')]);
+        ctx.genAi.script.push([calls({ name: 'get_financial_summary', args: {} })], reply('done'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -643,7 +808,7 @@ describe('chat integration', () => {
         const character = await withCharacter();
         ctx.genAi.script.push(
           [calls({ id: 'a', name: 'get_financial_summary', args: {} }, { id: 'b', name: 'get_financial_summary', args: {} })],
-          [text('ok')],
+          reply('ok'),
         );
 
         await stream(user.id, { characterId: character.id });
@@ -655,11 +820,11 @@ describe('chat integration', () => {
       it('reports an unknown tool to the model instead of failing the turn', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([calls({ id: 'x', name: 'does_not_exist', args: {} })], [text('sorry')]);
+        ctx.genAi.script.push([calls({ id: 'x', name: 'does_not_exist', args: {} })], reply('sorry'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
-        expect(types(frames)).toEqual(['session', 'text', 'done']);
+        expect(types(frames)).toEqual(['session', 'text', 'reply', 'done']);
         expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
           error: 'unknown tool: does_not_exist',
         });
@@ -670,12 +835,12 @@ describe('chat integration', () => {
         const character = await withCharacter();
         ctx.genAi.script.push(
           [calls({ id: 'x', name: 'create_financial_transaction', args: { amount: -5, unexpected: true } })],
-          [text('sorry')],
+          reply('sorry'),
         );
 
         const frames = await stream(user.id, { characterId: character.id });
 
-        expect(types(frames)).toEqual(['session', 'text', 'done']);
+        expect(types(frames)).toEqual(['session', 'text', 'reply', 'done']);
         expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toMatchObject({
           error: 'invalid arguments',
         });
@@ -688,7 +853,7 @@ describe('chat integration', () => {
         const character = await withCharacter();
         ctx.genAi.script.push(
           [calls({ id: 'w1', name: 'create_financial_transaction', args: { accountId, amount: 50000, type: 'EXPENSE', note: 'lunch' } })],
-          [text('Please confirm')],
+          reply('Please confirm'),
         );
         const frames = await stream(user.id, { characterId: character.id });
         const confirmation = frames.find((f) => f.type === 'confirmation_required')!;
@@ -700,7 +865,7 @@ describe('chat integration', () => {
 
         const { frames, confirmation } = await proposeTransaction(account.id);
 
-        expect(types(frames)).toEqual(['session', 'confirmation_required', 'text', 'done']);
+        expect(types(frames)).toEqual(['session', 'confirmation_required', 'text', 'reply', 'done']);
         expect(confirmation).toMatchObject({ tool: 'create_financial_transaction', args: { accountId: account.id, amount: 50000 } });
         expect(typeof confirmation.actionId).toBe('string');
         expect(await ctx.prisma.transaction.count()).toBe(0);
@@ -806,7 +971,7 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
         for (let i = 0; i < 5; i++) ctx.genAi.script.push(readRound());
-        ctx.genAi.script.push([text('finally')]);
+        ctx.genAi.script.push(reply('finally'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
@@ -837,7 +1002,7 @@ describe('chat integration', () => {
         const character = await withCharacter();
         ctx.genAi.sendMessageStream.mockImplementationOnce(async () =>
           (async function* () {
-            yield text('partial ');
+            yield text('{"message_vi":"partial ');
             throw new Error('stream broke');
           })(),
         );
@@ -858,7 +1023,7 @@ describe('chat integration', () => {
         ctx.genAi.sendMessageStream.mockImplementationOnce(async () => {
           seenAtModelCall = (await ctx.prisma.chatMessage.findMany()).map((m) => `${m.role}:${m.content}`);
           return (async function* () {
-            yield text('answer');
+            yield text(replyJson('answer', 'jp'));
             // still no model message while the stream is open
             seenAtModelCall.push(`open:${await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } })}`);
           })();
@@ -882,12 +1047,12 @@ describe('chat integration', () => {
               { id: 'm2', name: 'save_user_memory', args: { content: 'user has a dog' } },
             ),
           ],
-          [text('noted')],
+          reply('noted'),
         );
 
         const frames = await stream(user.id, { characterId: character.id, message: 'I like tea and I have a dog' });
 
-        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'tool_call', 'tool_result', 'text', 'done']);
+        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'tool_call', 'tool_result', 'text', 'reply', 'done']);
         const tea = await ctx.prisma.aiMemory.findFirstOrThrow({ where: { content: 'user likes tea' } });
         const dog = await ctx.prisma.aiMemory.findFirstOrThrow({ where: { content: 'user has a dog' } });
         expect(tea).toMatchObject({ source: 'CHAT', category: 'PREFERENCE' });
@@ -900,14 +1065,14 @@ describe('chat integration', () => {
       it('does not link anything when the memory could not be saved', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await withCharacter();
-        ctx.genAi.script.push([calls({ id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea' } })], [text('hmm')]);
+        ctx.genAi.script.push([calls({ id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea' } })], reply('hmm'));
         // pre-turn retrieval uses the first embedding call, the tool uses the second
         ctx.genAi.embedContent.mockImplementationOnce(async () => ({ embeddings: [{ values: Array.from({ length: 1536 }, () => 0) }] }));
         ctx.genAi.embedContent.mockRejectedValueOnce(new Error('embedding down'));
 
         const frames = await stream(user.id, { characterId: character.id });
 
-        expect(types(frames)).toEqual(['session', 'tool_call', 'text', 'done']);
+        expect(types(frames)).toEqual(['session', 'tool_call', 'text', 'reply', 'done']);
         expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
           error: 'embedding down',
         });
@@ -941,5 +1106,34 @@ describe('chat integration', () => {
         expect((await messagesOf(session.id)).map((m) => m.role)).toEqual(['USER']);
       });
     });
+  });
+});
+
+describe('ReplyStreamParser', () => {
+  const feedAll = (raw: string, size: number) => {
+    const parser = new ReplyStreamParser();
+    let out = '';
+    for (let i = 0; i < raw.length; i += size) out += parser.feed(raw.slice(i, i + size));
+    return out;
+  };
+  const raw = '{ "message_jp" : "日本\\"語", "message_vi" : "a\\nb\\t\\/\\\\ \\u00e9 \\ud83d\\ude00 \\"q\\" end" }';
+  const expected = 'a\nb\t/\\ é 😀 "q" end';
+
+  it.each(Array.from({ length: 24 }, (_, i) => i + 1))('decodes message_vi from chunks of %i characters', (size) => {
+    expect(feedAll(raw, size)).toBe(expected);
+  });
+
+  it('never emits a lone high surrogate at the end of a chunk', () => {
+    const parser = new ReplyStreamParser();
+    expect(parser.feed('{"message_vi":"\ud83d')).toBe('');
+    expect(parser.feed('\ude00x"}')).toBe('😀x');
+  });
+
+  it('ignores a message_vi-looking value inside message_jp', () => {
+    expect(feedAll('{"message_jp":"message_vi","message_vi":"ok"}', 3)).toBe('ok');
+  });
+
+  it('emits nothing for JSON without message_vi', () => {
+    expect(feedAll('{"other":"x"}', 2)).toBe('');
   });
 });

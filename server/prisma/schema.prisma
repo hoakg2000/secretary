@@ -13,33 +13,33 @@ datasource db {
 // ==========================================
 
 model User {
-  id                   String        @id @default(uuid())
-  email                String        @unique
-  passwordHash         String?       @map("password_hash")
-  googleAccessToken    String?       @map("google_access_token")
-  googleRefreshToken   String?       @map("google_refresh_token")
-  googleTokenExpiresAt DateTime?     @map("google_token_expires_at")
-  gmailHistoryId       String?       @map("gmail_history_id") // mốc Gmail history đã nạp xong (Pub/Sub push)
-  isActive             Boolean       @default(true) @map("is_active")
-  createdAt            DateTime      @default(now()) @map("created_at")
-  updatedAt            DateTime      @updatedAt @map("updated_at")
+  id                   String    @id @default(uuid())
+  email                String    @unique
+  passwordHash         String?   @map("password_hash")
+  googleAccessToken    String?   @map("google_access_token")
+  googleRefreshToken   String?   @map("google_refresh_token")
+  googleTokenExpiresAt DateTime? @map("google_token_expires_at")
+  gmailHistoryId       String?   @map("gmail_history_id") // mốc Gmail history đã nạp xong (Pub/Sub push)
+  isActive             Boolean   @default(true) @map("is_active")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  userSessions         UserSession[]
-  refreshTokens        RefreshToken[]
-  chatSessions         ChatSession[]
+  userSessions  UserSession[]
+  refreshTokens RefreshToken[]
+  chatSessions  ChatSession[]
 
   @@map("users")
 }
 
 model UserSession {
-  id          String    @id @default(uuid())
-  userId      String    @map("user_id")
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
   // Kept by decision D14 for future multi-user / multi-device support. Never written today.
-  deviceId    String?   @map("device_id")
-  ipAddress   String?   @map("ip_address")
-  userAgent   String?   @map("user_agent")
+  deviceId     String?  @map("device_id")
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
   lastActiveAt DateTime @default(now()) @map("last_active_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   refreshTokens RefreshToken[]
@@ -57,8 +57,8 @@ model RefreshToken {
   expiresAt DateTime @map("expires_at")
   createdAt DateTime @default(now()) @map("created_at")
 
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  session   UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
   @@index([userId])
@@ -66,13 +66,13 @@ model RefreshToken {
 }
 
 model Character {
-  id        String    @id @default(uuid())
-  name      String
-  voiceId   String?   @map("voice_id")
-  source    String?
+  id         String   @id @default(uuid())
+  name       String
+  voiceId    String?  @map("voice_id")
+  source     String?
   memoryRule String?  @map("memory_rule") @db.Text // D20: importance rule; null = built-in default
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   personas     Persona[]
   chatSessions ChatSession[]
@@ -97,7 +97,7 @@ model Persona {
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
 
-  character   Character   @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
   @@map("personas")
 }
@@ -114,14 +114,14 @@ enum EmailStatus {
 }
 
 model EmailLog {
-  id           String        @id @default(uuid())
-  messageId    String        @unique @map("message_id")
-  sender       String
-  subject      String?
-  rawBody      String?       @map("raw_body") @db.Text
-  aiSummary    String?       @map("ai_summary") @db.Text
-  status       EmailStatus   @default(PENDING)
-  createdAt    DateTime      @default(now()) @map("created_at")
+  id        String      @id @default(uuid())
+  messageId String      @unique @map("message_id")
+  sender    String
+  subject   String?
+  rawBody   String?     @map("raw_body") @db.Text
+  aiSummary String?     @map("ai_summary") @db.Text
+  status    EmailStatus @default(PENDING)
+  createdAt DateTime    @default(now()) @map("created_at")
 
   transactions Transaction[]
 
@@ -156,14 +156,14 @@ model EmailRule {
 
 // Kept by decision D11. Unused: BullMQ keeps job state in Redis.
 model QueueJob {
-  id           String   @id @default(uuid())
-  jobId        String   @unique @map("job_id")
-  queueName    String   @map("queue_name")
-  payload      Json
-  retryCount   Int      @default(0) @map("retry_count")
-  errorLog     String?  @map("error_log") @db.Text
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id         String   @id @default(uuid())
+  jobId      String   @unique @map("job_id")
+  queueName  String   @map("queue_name")
+  payload    Json
+  retryCount Int      @default(0) @map("retry_count")
+  errorLog   String?  @map("error_log") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@map("queue_jobs")
 }
@@ -173,17 +173,17 @@ model QueueJob {
 // ==========================================
 
 model BankAccount {
-  id            String        @id @default(uuid())
-  accountName   String        @map("account_name")
-  bankCode      String        @map("bank_code")
-  accountNumber String        @map("account_number")
-  cachedBalance Decimal       @default(0) @map("cached_balance") @db.Decimal(18, 2)
-  currency      String        @default("VND")
-  isActive      Boolean       @default(true) @map("is_active")
-  createdAt     DateTime      @default(now()) @map("created_at")
-  updatedAt     DateTime      @updatedAt @map("updated_at")
+  id            String   @id @default(uuid())
+  accountName   String   @map("account_name")
+  bankCode      String   @map("bank_code")
+  accountNumber String   @map("account_number")
+  cachedBalance Decimal  @default(0) @map("cached_balance") @db.Decimal(18, 2)
+  currency      String   @default("VND")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
-  transactions  Transaction[]
+  transactions Transaction[]
 
   @@map("bank_accounts")
 }
@@ -205,9 +205,9 @@ model Transaction {
   emailLogId      String?         @unique @map("email_log_id")
   createdAt       DateTime        @default(now()) @map("created_at")
 
-  account         BankAccount     @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  category        Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  emailLog        EmailLog?       @relation(fields: [emailLogId], references: [id], onDelete: SetNull)
+  account  BankAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  category Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  emailLog EmailLog?   @relation(fields: [emailLogId], references: [id], onDelete: SetNull)
 
   @@index([accountId, transactionTime])
   @@index([categoryId])
@@ -215,12 +215,12 @@ model Transaction {
 }
 
 model Category {
-  id           String        @id @default(uuid())
-  name         String
-  type         TransactionType
-  icon         String?
-  budgetLimit  Decimal?      @map("budget_limit") @db.Decimal(18, 2)
-  createdAt    DateTime      @default(now()) @map("created_at")
+  id          String          @id @default(uuid())
+  name        String
+  type        TransactionType
+  icon        String?
+  budgetLimit Decimal?        @map("budget_limit") @db.Decimal(18, 2)
+  createdAt   DateTime        @default(now()) @map("created_at")
 
   transactions Transaction[]
 
@@ -228,21 +228,21 @@ model Category {
 }
 
 model LocalCalendar {
-  id             String             @id @default(uuid())
+  id             String    @id @default(uuid())
   title          String
-  description    String?            @db.Text
+  description    String?   @db.Text
   location       String?
-  startTime      DateTime           @map("start_time")
-  endTime        DateTime           @map("end_time")
+  startTime      DateTime  @map("start_time")
+  endTime        DateTime  @map("end_time")
   attendees      Json?
   intent         String?
-  priorityStatus String?            @map("priority_status")
-  deletedAt      DateTime?          @map("deleted_at")  // xóa mềm: chờ job sync xóa trên Google rồi mới xóa hẳn
-  remindedAt     DateTime?          @map("reminded_at") // đã gửi nhắc lịch cho startTime hiện tại
-  createdAt      DateTime           @default(now()) @map("created_at")
-  updatedAt      DateTime           @updatedAt @map("updated_at")
+  priorityStatus String?   @map("priority_status")
+  deletedAt      DateTime? @map("deleted_at") // xóa mềm: chờ job sync xóa trên Google rồi mới xóa hẳn
+  remindedAt     DateTime? @map("reminded_at") // đã gửi nhắc lịch cho startTime hiện tại
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  syncState      CalendarSyncState?
+  syncState CalendarSyncState?
 
   @@index([startTime])
   @@map("local_calendars")
@@ -255,16 +255,16 @@ enum SyncStatus {
 }
 
 model CalendarSyncState {
-  id            String        @id @default(uuid())
-  localEventId  String        @unique @map("local_event_id")
-  googleEventId String?       @map("google_event_id")
-  syncStatus    SyncStatus    @default(DIRTY) @map("sync_status")
-  lastSyncedAt  DateTime?     @map("last_synced_at")
-  eTag          String?       @map("etag")
-  createdAt     DateTime      @default(now()) @map("created_at")
-  updatedAt     DateTime      @updatedAt @map("updated_at")
+  id            String     @id @default(uuid())
+  localEventId  String     @unique @map("local_event_id")
+  googleEventId String?    @map("google_event_id")
+  syncStatus    SyncStatus @default(DIRTY) @map("sync_status")
+  lastSyncedAt  DateTime?  @map("last_synced_at")
+  eTag          String?    @map("etag")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
 
-  localEvent    LocalCalendar @relation(fields: [localEventId], references: [id], onDelete: Cascade)
+  localEvent LocalCalendar @relation(fields: [localEventId], references: [id], onDelete: Cascade)
 
   @@index([syncStatus])
   @@map("calendar_sync_states")
@@ -275,19 +275,19 @@ model CalendarSyncState {
 // ==========================================
 
 model AiMemory {
-  id             String           @id @default(uuid())
-  content        String           @db.Text
+  id             String                       @id @default(uuid())
+  content        String                       @db.Text
   embedding      Unsupported("vector(1536)")?
   contentTsv     Unsupported("tsvector")?     @map("content_tsv")
   category       String?
-  source         String?                      // CHAT / EMAIL / MANUAL
-  initialScore   Float            @default(1.0) @map("initial_score")
-  decayFactor    Float            @default(0.01) @map("decay_factor")
-  lastAccessedAt DateTime         @default(now()) @map("last_accessed_at")
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
+  source         String? // CHAT / EMAIL / MANUAL
+  initialScore   Float                        @default(1.0) @map("initial_score")
+  decayFactor    Float                        @default(0.01) @map("decay_factor")
+  lastAccessedAt DateTime                     @default(now()) @map("last_accessed_at")
+  createdAt      DateTime                     @default(now()) @map("created_at")
+  updatedAt      DateTime                     @updatedAt @map("updated_at")
 
-  chatMessage    ChatMessage?
+  chatMessage ChatMessage?
 
   @@map("ai_memories")
 }
@@ -309,13 +309,13 @@ model RagChunk {
 // Relational only: no vector / tsvector column here, ever (D19).
 
 model ChatSession {
-  id            String    @id @default(uuid())
-  userId        String    @map("user_id")
-  characterId   String?   @map("character_id")
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  characterId   String?  @map("character_id")
   title         String?
-  lastMessageAt DateTime  @default(now()) @map("last_message_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   character Character?    @relation(fields: [characterId], references: [id], onDelete: SetNull)
@@ -335,6 +335,7 @@ model ChatMessage {
   sessionId String   @map("session_id")
   role      ChatRole
   content   String   @db.Text
+  contentJp String?  @map("content_jp") @db.Text
   toolCalls Json?    @map("tool_calls")
   memoryId  String?  @unique @map("memory_id")
   createdAt DateTime @default(now()) @map("created_at")

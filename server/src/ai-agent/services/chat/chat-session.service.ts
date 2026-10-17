@@ -45,10 +45,11 @@ export class ChatSessionService {
     role: ChatRole,
     content: string,
     toolCalls?: Prisma.InputJsonValue,
+    contentJp?: string,
   ) {
     const [message] = await this.prisma.$transaction([
       this.prisma.chatMessage.create({
-        data: { sessionId, role, content, toolCalls },
+        data: { sessionId, role, content, toolCalls, contentJp },
       }),
       this.prisma.chatSession.update({
         where: { id: sessionId },

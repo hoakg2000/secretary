@@ -94,9 +94,9 @@ Local is the source of truth; changes are pushed one way to Google.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/ai-agent/chat/stream` | JWT | SSE over POST. Body `{ message, sessionId?, characterId? }`. No `sessionId` → a session is created and `characterId` is required: missing → 400, unknown → 404. A `sessionId` that is unknown or belongs to another user → 404. All errors come before the stream opens, with no model call. With a `sessionId` the session's stored character is used and `characterId` is ignored (a deleted character → generic prompt). Storage: `db.md` section 5. Frames: `modules/ai/ai.controller.md`. |
+| POST | `/ai-agent/chat/stream` | JWT | SSE over POST. Body `{ message, sessionId?, characterId? }`. No `sessionId` → a session is created and `characterId` is required: missing → 400, unknown → 404. A `sessionId` that is unknown or belongs to another user → 404. All errors come before the stream opens, with no model call. With a `sessionId` the session's stored character is used and `characterId` is ignored (a deleted character → generic prompt). Storage: `db.md` section 5. The answer is a bilingual JSON reply; `text` frames carry the Vietnamese text and a `reply` frame carries the message ID and the Japanese text. Frames: `modules/ai/ai.controller.md`. |
 | GET | `/ai-agent/sessions?page=&pageSize=` | JWT | Own sessions, newest `lastMessageAt` first (`pageSize` max 50). |
-| GET | `/ai-agent/sessions/:id/messages?page=&pageSize=` | JWT | Messages of an own session, oldest first (full rows: `id`, `sessionId`, `role` (`USER` / `MODEL`), `content`, `toolCalls`, `memoryId`, `createdAt`). 404 for an unknown or foreign session. |
+| GET | `/ai-agent/sessions/:id/messages?page=&pageSize=` | JWT | Messages of an own session, oldest first (full rows: `id`, `sessionId`, `role` (`USER` / `MODEL`), `content`, `contentJp`, `toolCalls`, `memoryId`, `createdAt`). 404 for an unknown or foreign session. |
 | DELETE | `/ai-agent/sessions/:id` | JWT | Delete an own session and its messages. Memories made from them are kept. |
 | POST | `/ai-agent/actions/:actionId/confirm` | JWT | Run a write action the AI proposed. 404 if unknown, used or older than 5 minutes. |
 | DELETE | `/ai-agent/actions/:actionId` | JWT | Discard a proposed action. 404 if unknown, used or older than 5 minutes. |
@@ -105,7 +105,7 @@ Local is the source of truth; changes are pushed one way to Google.
 | PATCH | `/ai-agent/memories/:id` | JWT | Update `content` and/or `category`. New `content` rebuilds the embedding and full-text vector. `category: null` clears it. 404 if unknown. |
 | DELETE | `/ai-agent/memories/:id` | JWT | Delete a memory. 404 if unknown. |
 | POST | `/ai-agent/memories/search` | JWT | Hybrid search `{ query, category?, source?, limit? (1–20), minScore? (0–1, default 0.5) }`. |
-| POST | `/ai-agent/tts` | JWT | MP3 stream of the text of the stored message `{ messageId }`. Voice: the `voice_id` of the message's session character. 503 without `FISH_AUDIO_API_KEY` (checked first), 404 for an unknown or foreign message, 400 when the character is deleted or has no `voice_id` or the message text is blank. |
+| POST | `/ai-agent/tts` | JWT | MP3 stream of the Japanese text (`contentJp`) of the stored message `{ messageId }`. Voice: the `voice_id` of the message's session character. 503 without `FISH_AUDIO_API_KEY` (checked first), 404 for an unknown or foreign message, 400 when the character is deleted or has no `voice_id` or the message has no Japanese text (`contentJp` null or blank). |
 
 Where the details live: chat stream frames in `modules/ai/ai.controller.md`, the AI tools in `modules/ai/ai.service.md`, the chat storage rules in `db.md` section 5.
 

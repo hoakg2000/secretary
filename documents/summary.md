@@ -44,6 +44,7 @@ in section 3.
 - **Character and persona configuration**: system prompt, tone, identity, background, relationship
   dynamics. There can be many characters; the client chooses one. A new chat session requires a `characterId` and
   keeps it; an existing session uses its stored character.
+- **Bilingual reply**: the model answers in JSON with a Vietnamese text (shown, streamed) and a Japanese text (stored, read by TTS). Model: `gemini-3.8-flash`.
 - **Chat sessions and message storage**: every session and the full text of every message are stored
   in `chat_sessions` / `chat_messages`. The server supplies the history of a turn. Chat is not embedded and not
   searched by vector.
@@ -53,7 +54,7 @@ in section 3.
     `characters.memory_rule` (built-in default when null). Memories can also be added and edited manually.
   - **Memory decay**: `S(t) = S0 · e^(−λt)`, applied when memories are searched.
 - **Voice synthesis (TTS)**: Fish.audio, MP3 stream. The request sends a chat `messageId`; the server speaks that
-  message's text with the `voice_id` of the character of the message's session.
+  message's Japanese text (`content_jp`) with the `voice_id` of the character of the message's session.
 - **Proactive agent**:
   - Telegram text delivery, `POST /proactive/trigger`.
   - Reminder cron for events starting within 15 minutes.
