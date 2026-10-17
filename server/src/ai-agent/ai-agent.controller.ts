@@ -136,6 +136,7 @@ export class AiAgentController {
   })
   // POST để gửi được body (EventSource/GET không có body)
   @Sse('chat/stream', { method: RequestMethod.POST })
+  @HttpCode(HttpStatus.OK) // POST mặc định 201; luồng SSE trả 200 như tài liệu
   async chatStream(
     @Req() req: Request & { user: { userId: string } },
     @Body() dto: ChatStreamDto,

@@ -63,3 +63,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .claude/
 .cursor/
 .devin/
+
+# Real-flow (e2e) failure reports
+/test/e2e/reports/

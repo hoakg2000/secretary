@@ -1,39 +1,13 @@
-import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import cookieParser from 'cookie-parser';
-import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { configureApp } from './app.setup';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // Sau reverse proxy / tunnel: req.ip (ghi lúc đăng nhập, khóa của login throttle) phải là IP client thật.
-  // Số = số proxy đứng trước server; giá trị khác = danh sách IP/subnet tin cậy ('loopback', '10.0.0.0/8')
-  const trustProxy = process.env.TRUST_PROXY;
-  if (trustProxy) {
-    app.set(
-      'trust proxy',
-      /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy,
-    );
-  }
-
-  app.use(helmet());
-  app.use(cookieParser());
-  // Mọi controller nằm dưới /api/v1 (trừ GET /). Cookie refresh token dùng path /api/v1/auth
-  app.setGlobalPrefix('api/v1', { exclude: ['/'] });
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-    }),
-  );
-
-  app.enableCors({
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
-    credentials: true,
-  });
+  configureApp(app);
 
   // --- CẤU HÌNH SWAGGER ---
   const config = new DocumentBuilder()

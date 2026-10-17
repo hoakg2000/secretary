@@ -11,6 +11,7 @@ import { EmailRuleService } from './email-rule.service';
 import { EmailController } from './email.controller';
 import { EmailProcessor } from './email.processor';
 import { EmailService } from './email.service';
+import { EmailTools } from './email.tools';
 import { GmailPushService } from './gmail-push.service';
 
 @Module({
@@ -32,6 +33,7 @@ import { GmailPushService } from './gmail-push.service';
     EmailProcessor,
     EmailAiService,
     GmailPushService,
+    EmailTools,
   ],
   exports: [EmailService, EmailRuleService],
 })

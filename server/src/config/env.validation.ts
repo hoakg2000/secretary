@@ -84,6 +84,11 @@ export class EnvironmentVariables {
   @IsInt()
   BULLMQ_CONCURRENCY?: number;
 
+  // Tiền tố khóa Redis của BullMQ (mặc định 'bull'); đặt khác để tách worker giữa các môi trường
+  @IsOptional()
+  @IsString()
+  BULLMQ_PREFIX?: string;
+
   @IsOptional()
   @IsString()
   CALENDAR_SYNC_CRON?: string;

@@ -602,7 +602,7 @@ describe('chat integration', () => {
 
         const names = ctx.genAi.create.mock.calls[0][0].config.tools[0].functionDeclarations.map((d: any) => d.name);
         expect(names).toEqual(
-          expect.arrayContaining(['get_financial_summary', 'create_financial_transaction', 'save_user_memory', 'search_semantic_memory']),
+          expect.arrayContaining(['get_financial_summary', 'create_financial_transaction', 'save_user_memory', 'search_semantic_memory', 'search_emails']),
         );
       });
 

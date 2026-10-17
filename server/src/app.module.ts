@@ -34,6 +34,8 @@ import { ProactiveModule } from './proactive/proactive.module';
           host: configService.get<string>('REDIS_HOST', 'localhost'),
           port: configService.get<number>('REDIS_PORT', 6379),
         },
+        // undefined giữ prefix mặc định của BullMQ
+        prefix: configService.get<string>('BULLMQ_PREFIX') || undefined,
       }),
       inject: [ConfigService],
     }),
