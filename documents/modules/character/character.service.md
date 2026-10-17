@@ -2,55 +2,41 @@
 
 - **Class**: `CharacterService` — `server/src/character/character.service.ts`
 - **Description**: characters and personas. A character is the AI's identity; its personas are joined into the chat
-  system instruction by `AgentService`. Exactly one character may be active.
+  system instruction by `AgentService`. There can be many characters; the client chooses one per chat session.
 - **Tables**: `characters`, `personas` (read, write). Read elsewhere: `AgentService` (persona, `memory_rule`),
-  `TtsService` (`voice_id`).
+  `TtsService` through `ChatSessionService.findOwnMessage` (`voice_id`).
 - **No AI tool** in this service.
-
-Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | Rewritten from the code. Single-active rule is enforced by the partial unique index `characters_single_active` plus a deactivate-then-write transaction. Added `setActiveCharacter` and the persona ownership check. `memory_rule` is stored as given. |
 
 ---
 
 ## Methods
 
-### 1. createCharacter(dto) `[Implemented]`
+### 1. createCharacter(dto)
 
-- One transaction: when `dto.isActive`, set `is_active = false` on every active character; then create the row.
-- Returns the character with `personas`.
-- **Tables**: `characters` (update, create).
+- Creates the row from `dto`. Returns the character with `personas`.
+- **Tables**: `characters` (create).
 
-### 2. findAllCharacters() `[Implemented]`
+### 2. findAllCharacters()
 
 - All characters with `personas`, newest `created_at` first.
 
-### 3. findCharacterById(id) `[Implemented]`
+### 3. findCharacterById(id)
 
-- Character with `personas`; `NotFoundException` when missing. Used by every method below as the existence check.
+- Character with `personas`; `NotFoundException` when missing. Used by methods 4, 5 and 6 as the existence check (method 7 uses `findPersona`).
 
-### 4. updateCharacter(id, dto) `[Implemented]`
+### 4. updateCharacter(id, dto)
 
-- Existence check, then one transaction: when `dto.isActive`, deactivate the other active characters; update the row.
-  `dto` is written as given, including `memoryRule`.
+- Existence check, then update the row. `dto` is written as given, including `memoryRule`.
 
-### 5. removeCharacter(id) `[Implemented]`
+### 5. removeCharacter(id)
 
 - Existence check, then delete. `personas` cascade; `chat_sessions.character_id` is set null by the database.
 
-### 6. setActiveCharacter(id) `[Implemented]`
-
-- Existence check, then one transaction: deactivate the others, activate this one. Returns it with `personas`.
-
-### 7. addPersona(characterId, dto) `[Implemented]`
+### 6. addPersona(characterId, dto)
 
 - Existence check of the character, then create the persona (`type`, `value`).
 
-### 8. updatePersona(characterId, personaId, dto) / removePersona(characterId, personaId) `[Implemented]`
+### 7. updatePersona(characterId, personaId, dto) / removePersona(characterId, personaId)
 
 - Private `findPersona` looks up `id = personaId AND character_id = characterId`; `NotFoundException` otherwise, so a
   persona cannot be changed through another character's URL. Then update or delete.

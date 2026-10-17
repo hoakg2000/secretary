@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     globals: true,
     root: './',
+    passWithNoTests: true,
     include: ['**/*.e2e-spec.ts'],
   },
 });

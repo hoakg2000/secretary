@@ -6,7 +6,7 @@ local calendar with one-way Google push, AI agent (chat, tools, memory, TTS), pr
 - Setup and first login: [`../documents/setup.md`](../documents/setup.md)
 - Environment variables: [`../documents/environment.md`](../documents/environment.md)
 - Routes: [`../documents/api.md`](../documents/api.md) — Swagger at `/api/docs` is the reference
-- Plan and decisions: [`../documents/plan.md`](../documents/plan.md), [`../documents/decisions.md`](../documents/decisions.md)
+- Documents index: [`../documents/README.md`](../documents/README.md)
 
 ```
 docker compose up -d
@@ -17,4 +17,4 @@ npm run seed
 npm run start:dev
 ```
 
-Checks: `npx tsc --noEmit` and `npm test`.
+Checks: `npx tsc --noEmit` and `npm run test:int` (needs Postgres and Redis; see `documents/setup.md`).

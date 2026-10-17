@@ -1,8 +1,4 @@
-%% Finance module flow, drawn from server/src/finance (checked 2026-10-16).
-%% Change log
-%% 2026-10-16: Translated to English and checked against the code. Removed "Mobile App" (de-scoped); email
-%%             transactions arrive through EmailProcessor, not directly from Pub/Sub.
-%% 2026-10-16: Review fixes: backslash-n in node labels replaced by <br>; semicolon removed from an edge label.
+%% Finance module flow, drawn from server/src/finance (checked 2026-10-17).
 flowchart TD
     subgraph Clients["Callers"]
         Client["Client (JWT)"]
@@ -13,14 +9,14 @@ flowchart TD
     subgraph ControllerLayer["FinanceController /api/v1/finance"]
         JwtGuard["JwtAuthGuard"]
         BankCtrl["Accounts<br>- POST, GET /accounts<br>- GET /accounts/total-balance<br>- GET, PATCH, DELETE /accounts/:id<br>- PATCH /accounts/:id/balance"]
-        CatCtrl["Categories<br>- POST, GET /categories<br>- DELETE /categories/:id"]
-        TxCtrl["Transactions<br>- POST /transactions<br>- POST /transactions/search<br>- GET, DELETE /transactions/:id"]
+        CatCtrl["Categories<br>- POST, GET /categories<br>- PATCH, DELETE /categories/:id"]
+        TxCtrl["Transactions<br>- POST /transactions<br>- POST /transactions/search<br>- GET /summary<br>- GET, PATCH, DELETE /transactions/:id"]
     end
 
     subgraph ServiceLayer["FinanceService"]
         BankService["Accounts: create, list, get, update, delete or deactivate, adjustBalance, getTotalBalance"]
-        CatService["Categories: create, list, delete"]
-        TxService["Transactions: create, search, get, delete (balance moves in the same DB transaction)"]
+        CatService["Categories: create, list, update (not type), delete"]
+        TxService["Transactions: create, search, get, update, delete, summary per currency (balance moves in the same DB transaction)"]
         AiToolReg["AI tools<br>- get_financial_summary<br>- search_financial_transactions<br>- create_financial_transaction (needs confirmation)"]
     end
 
@@ -47,8 +43,8 @@ flowchart TD
 
     BankService -->|CRUD| BankAccountDB
     CatService -->|CRUD| CategoryDB
-    TxService -->|insert or delete| TransactionDB
-    TxService -->|increment or decrement| BankAccountDB
+    TxService -->|insert, update or delete| TransactionDB
+    TxService -->|increment or decrement, also on update, old and new account| BankAccountDB
     BankService -->|adjustBalance inserts a ledger row| TransactionDB
 
     TransactionDB -.->|FK account_id, restrict| BankAccountDB

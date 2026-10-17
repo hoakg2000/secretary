@@ -1,17 +1,12 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNotEmpty, IsUUID } from 'class-validator';
 
 export class TtsRequestDto {
-  @ApiProperty({ description: 'Nội dung văn bản cần phát âm thanh' })
-  @IsString()
-  @IsNotEmpty()
-  text: string;
-
-  @ApiPropertyOptional({
+  @ApiProperty({
     description:
-      'ID mẫu giọng nói Fish.audio (nếu không truyền sẽ dùng default)',
+      'ID tin nhắn cần phát âm thanh; giọng lấy từ Character của phiên chat chứa tin nhắn',
   })
-  @IsString()
-  @IsOptional()
-  voiceId?: string;
+  @IsUUID()
+  @IsNotEmpty()
+  messageId: string;
 }

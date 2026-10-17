@@ -2,14 +2,6 @@
 
 Project subagents live in `.claude/agents/`. Claude Code loads them at session start (restart the session after adding or editing one). Claude picks an agent by its `description`; you can also name it: "use the nestjs-reviewer agent on this branch".
 
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | First version: 10 agents covering the life cycle from analysis to documentation. Reviewed by a subagent; fixes applied (change-log order, `db.md` ownership, schema checks, integration test needs, plan section names, trigger overlap). |
-| 2026-10-16 | Removed the star counts and the plan-format reference to a deleted file; `documents/plans/` is only where a requested plan is written. |
-| 2026-10-16 | Review fixes: `Change log` is a `##` heading; the mobile app is marked `[De-scoped]`; `doc-writer` and `project-analyst` list the `[De-scoped]` tag; `project-analyst` no longer names a React Native app. |
-
 ## Life cycle
 
 ```
@@ -23,20 +15,20 @@ Subagents cannot start other subagents. The main session runs the chain: it call
 
 | Agent | Phase | Does | Tools | Model | Writes to |
 |-------|-------|------|-------|-------|-----------|
-| `project-analyst` | Analyze | Requirement → user stories, Given/When/Then acceptance criteria, impact, risks, open questions | Read, Grep, Glob, Write | opus | `documents/plans/*-analysis.md` (only when asked) |
-| `solution-architect` | Design | Implementation plan with fixed sections (documents to read, scope, steps, open points, real-service checks) | Read, Grep, Glob, Write | opus | `documents/plans/` |
-| `db-architect` | Database | Analyze mode: audit schema, indexes, drift with `db.md`. Change mode: edit schema, create migration with `--create-only`, check SQL for data loss. Hands `db.md` changes to doc-writer | Read, Grep, Glob, Edit, Write, Bash | opus | `server/prisma/` |
-| `nestjs-developer` | Code | Server features: DTO → service → controller → module; build, lint, unit tests | Read, Grep, Glob, Edit, Write, Bash | sonnet | `server/src/` |
-| `nextjs-developer` | Code | Web dashboard: App Router pages, server and client components, API calls per `api.md` | Read, Grep, Glob, Edit, Write, Bash | sonnet | `web-client/` |
-| `test-engineer` | Test | Unit (`*.spec.ts`), integration (`*.int-spec.ts` with the harness), e2e; reports suspected source bugs instead of changing source | Read, Grep, Glob, Edit, Write, Bash | sonnet | test files |
+| `project-analyst` | Analyze | Requirement → user stories, Given/When/Then acceptance criteria, impact, risks, open questions | Read, Grep, Glob, Write | opus | an analysis file in the repo's plans folder (only when asked) |
+| `solution-architect` | Design | Implementation plan with fixed sections (documents to read, scope, steps, open points, real-service checks) | Read, Grep, Glob, Write | opus | the plans folder (only when asked) |
+| `db-architect` | Database | Analyze mode: audit schema, indexes, drift between schema, migrations and docs. Change mode: edit schema, create migration with `--create-only`, check SQL for data loss. Hands doc changes to doc-writer | Read, Grep, Glob, Edit, Write, Bash | opus | schema and migrations |
+| `nestjs-developer` | Code | Server features: DTO → service → controller → module; build, lint, tests | Read, Grep, Glob, Edit, Write, Bash | sonnet | server source |
+| `nextjs-developer` | Code | Web dashboard: App Router pages, server and client components, API calls per the documented API contract | Read, Grep, Glob, Edit, Write, Bash | sonnet | web client source |
+| `test-engineer` | Test | Unit, integration and e2e tests, whichever the repo has, in its existing style; reports suspected source bugs instead of changing source | Read, Grep, Glob, Edit, Write, Bash | sonnet | test files |
 | `nestjs-reviewer` | Review | Read-only review of the server diff; verdict and findings by severity with file:line | Read, Grep, Glob, Bash | opus | nothing |
 | `nextjs-reviewer` | Review | Read-only review of the web-client diff: rendering boundaries, data caching, auth, accessibility | Read, Grep, Glob, Bash | opus | nothing |
 | `security-auditor` | Review | Read-only audit: auth, access control, OAuth token encryption, Pub/Sub webhooks, prompt injection, `npm audit` | Read, Grep, Glob, Bash | opus | nothing |
-| `doc-writer` | Document | Syncs `documents/` with the code, uses `documents/templates/`, adds change-log rows, flips `[Planned]` to `[Implemented]` | Read, Grep, Glob, Edit, Write, Bash | sonnet | `documents/` |
+| `doc-writer` | Document | Syncs the project documents with the code and follows the repo's doc templates | Read, Grep, Glob, Edit, Write, Bash | sonnet | the project documents |
 
 Reviewers and the auditor also set `disallowedTools: Edit, Write`. They still have Bash, so read-only is enforced by their prompt, not by the tool list.
 
-File ownership: doc-writer is the only agent that edits `documents/` (except `documents/plans/`, written by project-analyst and solution-architect). Schema and migration review belongs to db-architect, not nestjs-reviewer.
+File ownership: doc-writer is the only agent that edits the project documents (except plans, written by project-analyst and solution-architect). Schema and migration review belongs to db-architect, not nestjs-reviewer.
 
 Colors: there are 8 colors for 10 agents, so pairs share one. Planning agents are blue, reviewers are red and pink, the auditor is purple.
 
@@ -46,7 +38,7 @@ Each file follows the same layout, taken from the references below and the offic
 
 1. Frontmatter: `name`, `description` (when to use it, with trigger words and "Use PROACTIVELY" where Claude should call it unasked), `tools` (least privilege), `model`, `color`.
 2. Role: one line.
-3. Context: real paths, commands and conventions of this repo, so the agent does not have to rediscover them.
+3. Context: the stack the agent works in, and how to find this repo's conventions at run time (README, CLAUDE.md, docs index, existing files of the same kind). The code is the source of truth and the docs follow it.
 4. Workflow: numbered steps, read first and verify last.
 5. Rules: project conventions and hard "never" actions (no `migrate reset`, no real third-party calls, no commit unless asked).
 6. Done when: checks that can be run.
@@ -62,9 +54,9 @@ What was deliberately left out of the public examples: the JSON "context manager
 | [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) | Role → invocation steps → checklist layout. Models for: `code-reviewer`, `nextjs-developer`, `backend-developer`, `postgres-pro`, `database-administrator`, `test-automator`, `qa-expert`, `business-analyst`, `technical-writer`, `documentation-engineer`, `architect-reviewer` |
 | [wshobson/agents](https://github.com/wshobson/agents) | `comprehensive-review` plugin (code-reviewer, architect-review, security-auditor on opus): feedback ordered by severity, separate security auditor, opus for reviewers |
 | [iannuttall/claude-agents](https://github.com/iannuttall/claude-agents) (archived) | Small, single-purpose agents (`prd-writer`, `project-task-planner`, `security-auditor`) |
-| This repo | `documents/templates/` (module docs), `server/src/finance/finance.service.spec.ts` (unit test style), `server/test/integration/harness.ts` (integration harness) |
+| This repo | The doc templates and existing source files, read by each agent at run time |
 
 ## Not included
 
-- A debugger or DevOps agent, or a mobile agent (the React Native app is `[De-scoped]`). Add one when that work starts.
-- `web-client/` is empty today. `nextjs-developer` and `nextjs-reviewer` assume only Next.js with the App Router and read the real versions from `web-client/package.json`. Make them more specific, along with the web part of `test-engineer`, once it has a `package.json`.
+- A debugger or DevOps agent, or a mobile agent (the mobile app is dropped, see `summary.md` section 3). Add one when that work starts.
+- The Next.js agents assume only Next.js with the App Router and read the real versions from the web client's `package.json`. If there is no web client yet, they stop and report it.

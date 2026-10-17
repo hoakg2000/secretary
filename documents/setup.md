@@ -1,12 +1,6 @@
 # Secretary — Local setup
 
-All commands run from `server/`. Needs Node 24 and Docker.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | Removed a link to a deleted planning file; the untested Gmail push step is stated inline. |
+All commands run from `server/`. Needs Node 24 or newer (`engines` in `package.json`: `>=24`) and Docker. The reason for a recent Node: `npm run seed` runs `prisma/seed.ts` directly through Node's type stripping (`node prisma/seed.ts`, set in `prisma.config.ts`), so Node must support that without a flag.
 
 ## First run
 
@@ -60,7 +54,7 @@ Needs a connected Google account (above) and a public HTTPS URL for this server:
    authentication enabled: choose a service account and set an audience (for example the endpoint URL).
 4. Set `GMAIL_PUBSUB_TOPIC` (`projects/<project>/topics/<topic>`), `PUBSUB_PUSH_AUDIENCE` and
    `PUBSUB_PUSH_SERVICE_ACCOUNT` (the service account's email), then restart the server.
-5. The server calls Gmail `users.watch` at startup and once a day (a watch expires after 7 days). If Google was
+5. The server calls Gmail `users.watch` at startup and once a day at 03:00 server local time (a watch expires after 7 days). If Google was
    connected after startup, restart once so the watch is registered.
 
 Not yet run against the real Gmail and Pub/Sub services: the watch call and the push ID token check are untested outside the fakes.
@@ -78,19 +72,27 @@ The migrations dated `20261013…` assume the following. Take a `pg_dump` first.
 
 ## Hand-written indexes
 
-Three indexes cannot be expressed in `schema.prisma`: `characters_single_active`, `ai_memories_embedding_hnsw`,
-`ai_memories_content_tsv_gin`. When creating a migration, use `npx prisma migrate dev --create-only`, read the SQL,
+Two indexes cannot be expressed in `schema.prisma`: `ai_memories_embedding_hnsw`, `ai_memories_content_tsv_gin`. When creating a migration, use `npx prisma migrate dev --create-only`, read the SQL,
 and delete any `DROP INDEX` for these names before applying.
 
 ## Checks
 
 ```
 npx tsc --noEmit
-npm test
+npm run test:int
 ```
 
-`npm run test:int` runs the service-layer integration tests (`server/test/integration`) against a real Postgres. It
-needs only the docker `postgres` container: it creates the database `secretary_test` if missing, applies the
-migrations, and truncates every table before each test. It refuses any database whose name does not end in `_test`
-(override the URL with `TEST_DATABASE_URL`). Gemini, Google, Fish.audio, Telegram and the BullMQ queue are faked, so
-no Redis and no API key is used.
+`npm run test:int` is the only test suite: 13 files in `server/test/integration`, about 575 tests, about 150 s.
+`npm test` and `npm run test:e2e` find no test files and pass.
+
+It needs Postgres and Redis (`docker compose up -d` in `server/`). Global setup creates the database
+`secretary_test` if missing, applies the migrations, and pings Redis; it fails with a clear error if Redis is down.
+Every test starts from truncated tables. The suite refuses any database whose name does not end in `_test`
+(override the URL with `TEST_DATABASE_URL`).
+
+- The Nest module is compiled but never initialised, so no cron job runs. The harness starts the email worker and the agent tool discovery by hand. Cron handlers are tested by calling them.
+- The BullMQ queue and the `EmailProcessor` worker are real. Their Redis keys use the prefix `secretary-test`, so a dev worker on the same Redis cannot take test jobs.
+- Third parties are mocked at the client boundary, so no API key is used: Gemini through a scripted `GenAiProvider`, Google Calendar, Gmail and OAuth through `googleapis` spies, Telegram and Fish.audio through a URL-routed `fetch` stub that rejects unknown hosts.
+- One test waits for a real retry backoff (about 15 s).
+
+To add a test, create `server/test/integration/<name>.int-spec.ts`. Build the app with `createTestModule()`, call `resetState(ctx)` before each test, and use the helpers in `server/test/integration/support` (`seedUser`, `seedGoogleUser`, `seedEvent`, `seedEmailRule`, `createFakeGenAi`, `createGoogleSpies`, `createFetchStub`, `waitForJob`, `waitForStatus`, `expectRejection`).

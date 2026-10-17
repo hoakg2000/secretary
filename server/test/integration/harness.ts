@@ -1,82 +1,117 @@
-import { randomUUID } from 'node:crypto';
-import { getQueueToken } from '@nestjs/bullmq';
+import { BullRegistrar, getQueueToken } from '@nestjs/bullmq';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
+import { Queue, QueueEvents } from 'bullmq';
 import { GenAiProvider } from '../../src/ai-agent/genai.provider';
 import { AgentService } from '../../src/ai-agent/services/agent/agent.service';
 import { AppModule } from '../../src/app.module';
 import { PrismaService } from '../../src/prisma/prisma.service';
-import { TelegramClient } from '../../src/proactive/telegram.client';
+import { EmailProcessor } from '../../src/email/email.processor';
+import { createConfigOverride } from './support/config';
+import { createFakeGenAi } from './support/genai';
+import { createGoogleSpies } from './support/google';
+import { createFetchStub } from './support/http';
 
-// Safety net: no test may reach a real third party
-vi.stubGlobal('fetch', async (input: any) => {
-  throw new Error(`unmocked fetch: ${input?.url ?? input}`);
-});
+export * from './support/errors';
+export * from './support/genai';
+export * from './support/seed';
+export * from './support/wait';
+export { jsonResponse } from './support/http';
+export { googleError } from './support/google';
 
-export const EMBEDDING_DIMENSIONS = 1536;
+/** Every BullMQ key of the suite lives under this prefix, so a dev worker on the same Redis never sees it */
+export const TEST_QUEUE_PREFIX = 'secretary-test';
+export const EMAIL_QUEUE = 'email-processing';
+// internal token of @nestjs/bullmq (getSharedConfigToken() of the default config)
+const BULL_SHARED_CONFIG_TOKEN = 'BULLMQ_CONFIG(default)';
 
-export const httpError = (status: number) =>
-  Object.assign(new Error(`HTTP ${status}`), { status });
+/**
+ * AppModule compiled but never initialised (no init()): no @Cron, no calendar-sync / gmail-watch CronJob,
+ * no startup renewWatch. What the tests need is started by hand: Prisma, the real BullMQ worker,
+ * worker concurrency and the agent tool discovery.
+ */
+export async function createTestModule() {
+  const genAi = createFakeGenAi();
+  const http = createFetchStub();
+  const google = createGoogleSpies();
 
-// Chat stream chunks, same shape as agent.service.spec.ts
-export const text = (value: string) => ({
-  candidates: [{ content: { parts: [{ text: value }] } }],
-});
-export const calls = (...functionCalls: any[]) => ({ functionCalls });
+  // Safety net: no test may reach a real third party
+  vi.stubGlobal('fetch', http.fetchStub);
+  google.install();
 
-function createFakeGenAi() {
-  /** text -> axis of its one-hot embedding; unknown text is on axis 0 */
-  const axes = new Map<string, number>();
-  /** chunks of each model round, consumed in order */
-  const script: any[][] = [];
-
-  const embedContent = vi.fn(async ({ contents }: any) => {
-    const values = Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0);
-    values[axes.get(contents) ?? 0] = 1;
-    return { embeddings: [{ values }] };
-  });
-  const generateContent = vi.fn();
-  const sendMessageStream = vi.fn(async (_params: any) => {
-    const chunks = script.shift() ?? [text('')];
-    return (async function* () {
-      yield* chunks;
-    })();
-  });
-  const create = vi.fn((_params: any) => ({ sendMessageStream }));
-
-  return {
-    axes,
-    script,
-    embedContent,
-    generateContent,
-    sendMessageStream,
-    create,
-    get: () => ({ models: { embedContent, generateContent }, chats: { create } }),
+  const connection = {
+    host: process.env.REDIS_HOST ?? 'localhost',
+    port: Number(process.env.REDIS_PORT ?? 6379),
   };
+
+  let moduleRef: Awaited<ReturnType<ReturnType<typeof Test.createTestingModule>['compile']>> | undefined;
+  let queueEvents: QueueEvents | undefined;
+  try {
+    moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      // Nest logs are noise here; tests that spy Logger.prototype still see every call
+      .setLogger({ log: () => undefined, error: () => undefined, warn: () => undefined })
+      .overrideProvider(GenAiProvider)
+      .useValue(genAi)
+      .overrideProvider(BULL_SHARED_CONFIG_TOKEN)
+      .useValue({ connection, prefix: TEST_QUEUE_PREFIX })
+      .compile();
+
+    const prisma = moduleRef.get(PrismaService);
+    await prisma.$connect();
+
+    const queue = moduleRef.get<Queue>(getQueueToken(EMAIL_QUEUE));
+    assertTestPrefix(queue);
+    queueEvents = new QueueEvents(EMAIL_QUEUE, { connection, prefix: TEST_QUEUE_PREFIX });
+    await queueEvents.waitUntilReady();
+
+    // BullModule would do this in onModuleInit: start the real worker
+    await moduleRef.get(BullRegistrar, { strict: false }).register();
+    moduleRef.get(EmailProcessor).onApplicationBootstrap();
+    moduleRef.get(AgentService).onModuleInit();
+
+    const ref = moduleRef;
+    const events = queueEvents;
+    const config = createConfigOverride(ref.get(ConfigService));
+    return {
+      moduleRef: ref,
+      prisma,
+      queue,
+      queueEvents: events,
+      genAi,
+      http,
+      google,
+      config,
+      /** closes worker, QueueEvents, queue, Prisma; restores the config and Google spies and the fetch stub */
+      async close() {
+        config.restore();
+        await ref.get(EmailProcessor).worker.close();
+        await events.close();
+        await ref.close();
+        google.restore();
+        vi.unstubAllGlobals();
+      },
+    };
+  } catch (error) {
+    await queueEvents?.close().catch(() => undefined);
+    await moduleRef?.close().catch(() => undefined);
+    google.restore();
+    vi.unstubAllGlobals();
+    throw error;
+  }
 }
 
-/** AppModule compiled but never initialised: no cron job, no BullMQ worker, no renewWatch */
-export async function createTestModule() {
-  const queue = {
-    add: vi.fn(async (_name: string, _data: any, opts: any) => ({ id: opts.jobId })),
-  };
-  const telegram = { sendMessage: vi.fn(async (_text: string) => 'SENT') };
-  const genAi = createFakeGenAi();
-
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(getQueueToken('email-processing'))
-    .useValue(queue)
-    .overrideProvider(GenAiProvider)
-    .useValue(genAi)
-    .overrideProvider(TelegramClient)
-    .useValue(telegram)
-    .compile();
-
-  moduleRef.get(AgentService).onModuleInit();
-
-  return { moduleRef, prisma: moduleRef.get(PrismaService), queue, telegram, genAi };
+/** Overrides config keys until the next resetState (undefined = missing, other keys read the real config) */
+export function overrideConfig(ctx: TestContext, values: Record<string, string | undefined>) {
+  ctx.config.override(values);
 }
 
 export type TestContext = Awaited<ReturnType<typeof createTestModule>>;
+
+function assertTestPrefix(queue: Queue) {
+  if (queue.opts.prefix !== TEST_QUEUE_PREFIX) {
+    throw new Error(`Refusing to run: queue prefix is "${queue.opts.prefix}", expected "${TEST_QUEUE_PREFIX}"`);
+  }
+}
 
 export async function resetDb(prisma: PrismaService) {
   const [{ name }] = await prisma.$queryRaw<{ name: string }[]>`SELECT current_database() AS name`;
@@ -91,20 +126,18 @@ export async function resetDb(prisma: PrismaService) {
   );
 }
 
-export function seedUser(prisma: PrismaService, data: Record<string, unknown> = {}) {
-  return prisma.user.create({
-    data: { email: `${randomUUID()}@test.local`, ...data },
-  });
+/** Between tests: truncate the DB, empty the test queue, reset the fakes, the fetch stub and the Google spies */
+export async function resetState(ctx: TestContext) {
+  assertTestPrefix(ctx.queue);
+  await resetDb(ctx.prisma);
+  await ctx.queue.obliterate({ force: true });
+  ctx.genAi.reset();
+  ctx.http.reset();
+  ctx.config.restore();
+  ctx.google.reset();
 }
 
-export function seedAccount(prisma: PrismaService, data: Record<string, unknown> = {}) {
-  return prisma.bankAccount.create({
-    data: {
-      accountName: 'Main',
-      bankCode: 'VCB',
-      accountNumber: '0011223344',
-      cachedBalance: 1000000,
-      ...data,
-    },
-  });
+/** Jobs of the test queue in any state */
+export async function totalJobs(ctx: TestContext) {
+  return Object.values(await ctx.queue.getJobCounts()).reduce((sum, n) => sum + n, 0);
 }

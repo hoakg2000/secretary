@@ -126,27 +126,6 @@ export class CharacterController {
     };
   }
 
-  @Patch(':id/active')
-  @ApiOperation({
-    summary: 'Đặt Character làm nhân vật hoạt động chính (Active)',
-  })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'Kích hoạt Character thành công.',
-  })
-  @ApiResponse({
-    status: HttpStatus.NOT_FOUND,
-    description: 'Không tìm thấy Character.',
-  })
-  async setActiveCharacter(@Param('id') id: string) {
-    const data = await this.characterService.setActiveCharacter(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Kích hoạt Character thành công',
-      data,
-    };
-  }
-
   // ==================== PERSONA ENDPOINTS ====================
 
   @Post(':id/personas')

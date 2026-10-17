@@ -1,6 +1,4 @@
-%% Module map, drawn from server/src (checked 2026-10-16).
-%% Change log
-%% 2026-10-16: Review fix: added this change log block.
+%% Module map, drawn from server/src (checked 2026-10-17).
 flowchart LR
   subgraph ModApp["AppModule: imports every module below"]
     AppController["AppController: GET /"]
@@ -129,4 +127,5 @@ flowchart LR
   PubSub -->|"POST /email/pubsub with Google ID token"| EmailController
   CalendarSyncService -->|"one-way push of local events"| GoogleCalendar
   TelegramClient -->|"sendMessage"| Telegram
+  TtsService -->|"findOwnMessage"| ChatSessionService
   TtsService -->|"POST /v1/tts"| FishAudio

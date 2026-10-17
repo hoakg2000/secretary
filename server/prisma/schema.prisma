@@ -70,7 +70,6 @@ model Character {
   name      String
   voiceId   String?   @map("voice_id")
   source    String?
-  isActive  Boolean   @default(false) @map("is_active")
   memoryRule String?  @map("memory_rule") @db.Text // D20: importance rule; null = built-in default
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")

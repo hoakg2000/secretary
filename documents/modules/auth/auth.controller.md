@@ -8,19 +8,11 @@
 - **Description**: login of the master user, refresh-token rotation, logout, current session, Google OAuth2 connect
   and callback (Gmail and Calendar).
 
-Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | Rewritten from the code. `LoginDto` is `email` + `password` (was `username`, `deviceId`, `userAgent`); `user_sessions.device_id` is never written. Login returns `accessToken` and `user` only (no `tokenType`, `expiresIn`, `session`). Added `POST /auth/refresh` rotation and replay rule, `GET /auth/session`, `GET /auth/google/connect` and the `state` check on the callback. The refresh token is stored as a SHA-256 hash, not encrypted. |
-
 ---
 
 ## Endpoints
 
-### 1. Login — `POST /api/v1/auth/login` `[Implemented]`
+### 1. Login — `POST /api/v1/auth/login`
 
 - **Handler**: `login(loginDto, req, res)` → `AuthService.login`
 - **Auth**: `@Public()`, `ThrottlerGuard` (5 per minute, key `req.ip`; 429 beyond that).
@@ -31,7 +23,7 @@ Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not bu
 - **Response `data`**: `{ accessToken, user: { id, email } }`.
 - 401 for an unknown email, a user without a password, an inactive user, or a wrong password (same message).
 
-### 2. Refresh — `POST /api/v1/auth/refresh` `[Implemented]`
+### 2. Refresh — `POST /api/v1/auth/refresh`
 
 - **Handler**: `refreshAccessToken(req, body, res)` → `AuthService.refreshAccessToken`
 - **Auth**: `@Public()`.
@@ -40,7 +32,7 @@ Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not bu
 - **Response `data`**: `{ accessToken }`, plus `refreshToken` only when no cookie was sent.
 - 401 for a bad, expired or unknown token. Presenting an already rotated token deletes the whole session.
 
-### 3. Logout — `POST /api/v1/auth/logout` `[Implemented]`
+### 3. Logout — `POST /api/v1/auth/logout`
 
 - **Handler**: `logout(req, body, res)` → `AuthService.logout`
 - **Auth**: JWT.
@@ -48,14 +40,14 @@ Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not bu
   when it belongs to the same user.
 - Clears the cookie only when the current session ends. Response has no `data`.
 
-### 4. Current session — `GET /api/v1/auth/session` `[Implemented]`
+### 4. Current session — `GET /api/v1/auth/session`
 
 - **Handler**: `getActiveSession(req)` → `AuthService.getActiveSession`
 - **Auth**: JWT.
 - **Response `data`**: `{ sessionId, ipAddress, userAgent, lastActiveAt, createdAt, user: { id, email, isActive, createdAt } }`.
   Also updates `last_active_at`.
 
-### 5. Google connect URL — `GET /api/v1/auth/google/connect` `[Implemented]`
+### 5. Google connect URL — `GET /api/v1/auth/google/connect`
 
 - **Handler**: `getGoogleConnectUrl(req)` → `AuthService.getGoogleConnectUrl`
 - **Auth**: JWT.
@@ -63,7 +55,7 @@ Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not bu
   `https://www.googleapis.com/auth/calendar`, `https://www.googleapis.com/auth/userinfo.email`. The `state` is a
   JWT (`typ: oauth_state`) valid 10 minutes that carries the user ID.
 
-### 6. Google callback — `GET /api/v1/auth/google/callback` `[Implemented]`
+### 6. Google callback — `GET /api/v1/auth/google/callback`
 
 - **Handler**: `handleGoogleCallback(code, state)` → `AuthService.handleGoogleCallback`
 - **Auth**: `@Public()` (Google redirects the browser here; the signed `state` is the proof).

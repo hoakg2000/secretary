@@ -1,8 +1,4 @@
 %% Calendar module flow, drawn from server/src/calendar (checked 2026-10-16).
-%% Change log
-%% 2026-10-16: Rewritten from the code. Sync is one-way (local to Google) with patch, client-generated event ID,
-%%             soft delete and POST /calendar/sync; cron expression comes from CALENDAR_SYNC_CRON.
-%% 2026-10-16: Review fix: `;` ends a statement in a sequence diagram; replaced in two messages so the diagram parses.
 sequenceDiagram
     autonumber
     actor Client as Client / Owner

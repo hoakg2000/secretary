@@ -11,20 +11,10 @@ export class CharacterService {
 
   // ==================== CHARACTER LOGIC ====================
 
-  // Bỏ kích hoạt + ghi phải nằm trong một transaction: DB chỉ cho phép một Character active (partial unique index)
   async createCharacter(dto: CreateCharacterDto) {
-    return this.prisma.$transaction(async (tx) => {
-      if (dto.isActive) {
-        await tx.character.updateMany({
-          where: { isActive: true },
-          data: { isActive: false },
-        });
-      }
-
-      return tx.character.create({
-        data: dto,
-        include: { personas: true },
-      });
+    return this.prisma.character.create({
+      data: dto,
+      include: { personas: true },
     });
   }
 
@@ -51,19 +41,10 @@ export class CharacterService {
   async updateCharacter(id: string, dto: UpdateCharacterDto) {
     await this.findCharacterById(id);
 
-    return this.prisma.$transaction(async (tx) => {
-      if (dto.isActive) {
-        await tx.character.updateMany({
-          where: { id: { not: id }, isActive: true },
-          data: { isActive: false },
-        });
-      }
-
-      return tx.character.update({
-        where: { id },
-        data: dto,
-        include: { personas: true },
-      });
+    return this.prisma.character.update({
+      where: { id },
+      data: dto,
+      include: { personas: true },
     });
   }
 
@@ -72,23 +53,6 @@ export class CharacterService {
 
     return this.prisma.character.delete({
       where: { id },
-    });
-  }
-
-  async setActiveCharacter(id: string) {
-    await this.findCharacterById(id);
-
-    return this.prisma.$transaction(async (tx) => {
-      await tx.character.updateMany({
-        where: { id: { not: id }, isActive: true },
-        data: { isActive: false },
-      });
-
-      return tx.character.update({
-        where: { id },
-        data: { isActive: true },
-        include: { personas: true },
-      });
     });
   }
 

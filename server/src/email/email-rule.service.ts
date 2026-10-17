@@ -57,8 +57,9 @@ export class EmailRuleService {
     });
   }
 
-  async findAll() {
+  async findAll(type?: EmailRuleType) {
     return this.prisma.emailRule.findMany({
+      where: { type },
       orderBy: { createdAt: 'desc' },
     });
   }

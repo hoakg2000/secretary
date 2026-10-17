@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { Redis } from 'ioredis';
 import pg from 'pg';
 import type { TestProject } from 'vitest/node';
 
@@ -21,6 +22,24 @@ export default async function setup({ config }: TestProject) {
     }
   } finally {
     await admin.end();
+  }
+
+  const redis = new Redis({
+    host: config.env.REDIS_HOST,
+    port: Number(config.env.REDIS_PORT),
+    lazyConnect: true,
+    maxRetriesPerRequest: 0,
+    retryStrategy: () => null,
+  });
+  try {
+    await redis.connect();
+    await redis.ping();
+  } catch (error) {
+    throw new Error(
+      `Redis is not reachable at ${config.env.REDIS_HOST}:${config.env.REDIS_PORT}. Run \`docker compose up -d\` in server/ first. (${(error as Error).message})`,
+    );
+  } finally {
+    redis.disconnect();
   }
 
   const env = { ...process.env, DATABASE_URL: url.href };

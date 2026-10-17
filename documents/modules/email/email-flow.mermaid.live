@@ -1,9 +1,4 @@
-%% Email module flow, drawn from server/src/email (checked 2026-10-16).
-%% Change log
-%% 2026-10-16: Rewritten from the code. Pub/Sub push route is /email/pubsub with a Google ID token check; dedup is
-%%             the unique message_id only (no SHA-256 hash); rule matching happens at ingest, not in the worker;
-%%             the worker classifies every queued email with one Gemini call and acts on the model's category.
-%% 2026-10-16: Review fix: the urgent notice goes to the Telegram Bot API participant, not Google.
+%% Email module flow, drawn from server/src/email (checked 2026-10-17).
 sequenceDiagram
     autonumber
     actor Owner as Owner (JWT)
@@ -19,7 +14,7 @@ sequenceDiagram
 
     rect rgb(240, 248, 255)
     note over Owner, DB: 1. Email rules (REST)
-    Owner->>Ctrl: POST / GET / PATCH / DELETE /email-rules
+    Owner->>Ctrl: POST / GET (optional type filter) / PATCH / DELETE /email-rules
     Ctrl->>Svc: EmailRuleService create / findAll / findOne / update / remove
     Svc->>DB: email_rules (regex checked: max 200 characters, valid syntax)
     Ctrl-->>Owner: { statusCode, message, data }
@@ -62,6 +57,24 @@ sequenceDiagram
     else other
         Svc->>Queue: add process-email-job (jobId = email log ID, priority 1 / 2 / 3, 3 attempts)
     end
+    end
+
+    rect rgb(255, 240, 245)
+    note over Owner, Queue: 3b. Logs and reprocess (REST, JWT)
+    Owner->>Ctrl: GET /email/logs (status, page, pageSize)
+    Ctrl->>Svc: EmailService.listLogs
+    Svc->>DB: email_logs, newest first, full rows
+    Owner->>Ctrl: POST /email/logs/:id/reprocess
+    Ctrl->>Svc: EmailService.reprocess
+    Svc->>DB: unknown id: 404. Claim FAILED to PENDING, else 400
+    Svc->>Queue: remove the old job with the same ID
+    Svc->>DB: classify again
+    alt blacklist
+        Svc->>DB: status = SKIPPED
+    else other
+        Svc->>Queue: add process-email-job (same options as ingest)
+    end
+    note over Svc, DB: if removing or queueing fails: status back to FAILED
     end
 
     rect rgb(245, 255, 250)

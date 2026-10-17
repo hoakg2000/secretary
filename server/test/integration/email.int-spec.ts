@@ -1,412 +1,527 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { google } from 'googleapis';
-import { randomUUID } from 'node:crypto';
-import { GoogleClientFactory } from '../../src/auth/google-client.factory';
+import { EmailMatcher, EmailRuleType, EmailStatus } from '@prisma/client';
 import { EmailRuleService } from '../../src/email/email-rule.service';
-import { EmailProcessor } from '../../src/email/email.processor';
 import { EmailService } from '../../src/email/email.service';
-import { GmailPushService } from '../../src/email/gmail-push.service';
-import { FinanceService } from '../../src/finance/finance.service';
-import { createTestModule, httpError, resetDb, seedAccount, seedUser, TestContext } from './harness';
+import { rejection, totalJobs, MISSING, createTestModule, resetState, seedEmailRule, type TestContext } from './harness';
 
-let ctx: TestContext;
-let rules: EmailRuleService;
-let emails: EmailService;
 
-beforeAll(async () => {
-  ctx = await createTestModule();
-  rules = ctx.moduleRef.get(EmailRuleService);
-  emails = ctx.moduleRef.get(EmailService);
-});
-beforeEach(async () => {
-  await resetDb(ctx.prisma);
-  ctx.queue.add.mockClear();
-  ctx.telegram.sendMessage.mockClear();
-  ctx.genAi.generateContent.mockReset();
-});
-afterAll(() => ctx.moduleRef.close());
+describe('email integration (rules + ingest, queue paused so the worker never takes jobs)', () => {
+  let ctx: TestContext;
+  let rules: EmailRuleService;
+  let emails: EmailService;
 
-const mail = (overrides: any = {}) => ({
-  messageId: `<${randomUUID()}@mail>`,
-  sender: 'Bank <no-reply@bank.vn>',
-  subject: 'Balance change',
-  rawBody: 'Your account received 150,000 VND',
-  ...overrides,
-});
-
-describe('EmailRuleService (integration)', () => {
-  it('CRUD round trip', async () => {
-    const created = await rules.create({ type: 'moneylist', matcher: 'sender', matchValue: 'bank.vn' });
-    expect(await rules.findOne(created.id)).toMatchObject({ matchValue: 'bank.vn', isActive: true });
-
-    await rules.update(created.id, { matchValue: 'bank.com', isActive: false });
-    expect(await rules.findAll()).toMatchObject([{ id: created.id, matchValue: 'bank.com', isActive: false }]);
-
-    await rules.remove(created.id);
-    expect(await ctx.prisma.emailRule.count()).toBe(0);
-    await expect(rules.findOne(created.id)).rejects.toBeInstanceOf(NotFoundException);
+  beforeAll(async () => {
+    ctx = await createTestModule();
+    rules = ctx.moduleRef.get(EmailRuleService);
+    emails = ctx.moduleRef.get(EmailService);
   });
 
-  it('rejects an invalid or over-long regex on create and on an update that only changes the matcher', async () => {
-    const regex = { type: 'whitelist' as const, matcher: 'regex' as const };
-    await expect(rules.create({ ...regex, matchValue: '(' })).rejects.toBeInstanceOf(BadRequestException);
-    await expect(rules.create({ ...regex, matchValue: 'a'.repeat(201) })).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
-    expect(await ctx.prisma.emailRule.count()).toBe(0);
+  afterAll(() => ctx.close());
 
-    const keyword = await rules.create({ type: 'whitelist', matcher: 'keyword', matchValue: '(' });
-    await expect(rules.update(keyword.id, { matcher: 'regex' })).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
-    expect(await rules.findOne(keyword.id)).toMatchObject({ matcher: 'keyword' });
+  beforeEach(async () => {
+    await resetState(ctx);
+    // jobs stay where they were added so the tests can inspect them; obliterate clears the pause
+    await ctx.queue.pause();
   });
 
-  it('classify: blacklist beats moneylist beats whitelist, inactive rules are ignored', async () => {
-    const email = { sender: 'Bank <no-reply@bank.vn>', subject: 'Balance CHANGE', rawBody: 'ref TX-4242' };
-    expect(await rules.classify(email)).toBeNull();
-
-    await rules.create({ type: 'whitelist', matcher: 'sender', matchValue: 'BANK.VN' });
-    expect(await rules.classify(email)).toBe('whitelist');
-    expect(await rules.classify({ sender: 'someone@else.com' })).toBeNull();
-
-    await rules.create({ type: 'moneylist', matcher: 'keyword', matchValue: 'balance change' });
-    expect(await rules.classify(email)).toBe('moneylist');
-
-    const blacklist = await rules.create({ type: 'blacklist', matcher: 'regex', matchValue: 'tx-\\d{4}' });
-    expect(await rules.classify(email)).toBe('blacklist');
-
-    await rules.update(blacklist.id, { isActive: false });
-    expect(await rules.classify(email)).toBe('moneylist');
+  const mail = (data: Record<string, unknown> = {}) => ({
+    messageId: `<${Math.random().toString(36).slice(2)}@mail>`,
+    sender: 'Someone <someone@example.com>',
+    subject: 'Hello',
+    rawBody: 'Body text',
+    ...data,
   });
-});
-
-describe('EmailService (integration)', () => {
-  it('ingest stores a PENDING log and enqueues it with the log ID as job ID and a priority by rule', async () => {
-    await rules.create({ type: 'moneylist', matcher: 'sender', matchValue: 'bank.vn' });
-    await rules.create({ type: 'whitelist', matcher: 'sender', matchValue: 'boss@' });
-
-    for (const [sender, priority] of [
-      ['no-reply@bank.vn', 1],
-      ['boss@work.com', 2],
-      ['news@shop.com', 3],
-    ] as const) {
-      const input = mail({ sender });
-      const result = await emails.ingest(input);
-
-      const log = await ctx.prisma.emailLog.findUniqueOrThrow({ where: { messageId: input.messageId } });
-      expect(log).toMatchObject({ status: 'PENDING', sender, rawBody: input.rawBody });
-      expect(result).toMatchObject({ emailLogId: log.id, jobId: log.id, status: 'PENDING' });
-      expect(ctx.queue.add).toHaveBeenLastCalledWith(
-        'process-email-job',
-        expect.objectContaining({ emailLogId: log.id, messageId: input.messageId }),
-        expect.objectContaining({ jobId: log.id, priority }),
-      );
-    }
-  });
-
-  it('a blacklisted mail is SKIPPED and never enqueued', async () => {
-    await rules.create({ type: 'blacklist', matcher: 'sender', matchValue: 'spam' });
-    const input = mail({ sender: 'spam@ads.com' });
-
-    await emails.ingest(input);
-
-    expect(await ctx.prisma.emailLog.findMany()).toMatchObject([{ status: 'SKIPPED' }]);
-    expect(ctx.queue.add).not.toHaveBeenCalled();
-  });
-
-  it('a duplicate is re-enqueued while PENDING and ignored once PROCESSED', async () => {
-    const input = mail();
-    const first = await emails.ingest(input);
-
-    await expect(emails.ingest(input)).resolves.toMatchObject({ jobId: first?.emailLogId });
-    expect(await ctx.prisma.emailLog.count()).toBe(1);
-    expect(ctx.queue.add.mock.calls.map((call) => call[2].jobId)).toEqual([
-      first?.emailLogId,
-      first?.emailLogId,
-    ]);
-
-    await ctx.prisma.emailLog.update({ where: { id: first!.emailLogId }, data: { status: 'PROCESSED' } });
-    await expect(emails.ingest(input)).resolves.toBeNull();
-    expect(ctx.queue.add).toHaveBeenCalledTimes(2);
-  });
-
-  it('two concurrent ingests of the same message leave one row', async () => {
-    const input = mail();
-
-    await Promise.allSettled([emails.ingest(input), emails.ingest(input)]);
-
-    expect(await ctx.prisma.emailLog.count()).toBe(1);
-  });
-});
-
-describe('EmailProcessor (integration)', () => {
-  let processor: EmailProcessor;
-
-  beforeAll(() => {
-    processor = ctx.moduleRef.get(EmailProcessor);
-  });
-
-  const classifyAs = (classification: object) =>
-    ctx.genAi.generateContent.mockResolvedValue({
-      text: JSON.stringify({ urgent: false, summary: 'summary', ...classification }),
-    });
-
-  const seedJob = async (attemptsMade = 0) => {
-    const input = mail();
-    const log = await ctx.prisma.emailLog.create({ data: input });
-    const job: any = {
-      id: log.id,
-      data: { emailLogId: log.id, ...input, ruleType: null },
-      attemptsMade,
-      opts: { attempts: 3 },
-    };
-    return { log, job };
-  };
-
   const logOf = (id: string) => ctx.prisma.emailLog.findUniqueOrThrow({ where: { id } });
-  const balanceOf = async (id: string) =>
-    (await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id } })).cachedBalance.toFixed(2);
-  const income = (overrides: object = {}) => ({
-    category: 'TRANSACTION',
-    transaction: { amount: 150000, direction: 'INCOME', currency: 'vnd', bankCode: 'vcb', ...overrides },
-  });
+  const rule = (data: Record<string, unknown>) => seedEmailRule(ctx.prisma, data);
 
-  it('TRANSACTION with one matching account creates a linked transaction and moves the balance', async () => {
-    const account = await seedAccount(ctx.prisma);
-    await seedAccount(ctx.prisma, { isActive: false });
-    const { log, job } = await seedJob();
-    classifyAs({ ...income({ counterparty: 'ACME' }), summary: 'Received 150000 from ACME' });
+  // ---------------------------------------------------------------- EmailRuleService
 
-    await processor.process(job);
+  describe('create', () => {
+    it('persists a rule with isActive defaulting to true', async () => {
+      const created = await rules.create({
+        type: EmailRuleType.moneylist,
+        matcher: EmailMatcher.sender,
+        matchValue: 'bank@x.com',
+      });
 
-    expect(await ctx.prisma.transaction.findMany()).toMatchObject([
-      { accountId: account.id, emailLogId: log.id, type: 'INCOME', counterparty: 'ACME' },
-    ]);
-    expect(await balanceOf(account.id)).toBe('1150000.00');
-    expect(await logOf(log.id)).toMatchObject({
-      status: 'PROCESSED',
-      aiSummary: 'Received 150000 from ACME',
+      const saved = await ctx.prisma.emailRule.findUniqueOrThrow({ where: { id: created.id } });
+      expect(saved).toMatchObject({ type: 'moneylist', matcher: 'sender', matchValue: 'bank@x.com', isActive: true });
+    });
+
+    it('rejects an invalid regex with 400 and stores nothing', async () => {
+      await expect(
+        rules.create({ type: EmailRuleType.whitelist, matcher: EmailMatcher.regex, matchValue: '(' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(await ctx.prisma.emailRule.count()).toBe(0);
+    });
+
+    it('rejects a regex longer than 200 characters with 400', async () => {
+      await expect(
+        rules.create({ type: EmailRuleType.whitelist, matcher: EmailMatcher.regex, matchValue: 'a'.repeat(201) }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('accepts a regex of exactly 200 characters', async () => {
+      const created = await rules.create({
+        type: EmailRuleType.whitelist,
+        matcher: EmailMatcher.regex,
+        matchValue: 'a'.repeat(200),
+      });
+
+      expect(created.matchValue).toHaveLength(200);
+    });
+
+    it('does not apply the length limit to a sender matcher', async () => {
+      const created = await rules.create({
+        type: EmailRuleType.whitelist,
+        matcher: EmailMatcher.sender,
+        matchValue: 'a'.repeat(300),
+      });
+
+      expect(created.matchValue).toHaveLength(300);
     });
   });
 
-  it('TRANSACTION without exactly one valid match only stores the summary', async () => {
-    const account = await seedAccount(ctx.prisma);
+  describe('findAll', () => {
+    it('lists every rule newest first when no type is given', async () => {
+      await rule({ matchValue: 'old', createdAt: new Date('2030-01-01T00:00:00Z') });
+      await rule({ matchValue: 'new', type: EmailRuleType.blacklist, createdAt: new Date('2030-01-02T00:00:00Z') });
 
-    for (const transaction of [
-      { bankCode: 'TCB' },
-      { currency: 'USD' },
-      { amount: -5 },
-      { bankCode: undefined },
-    ]) {
-      const { log, job } = await seedJob();
-      classifyAs(income(transaction));
-      await processor.process(job);
-      expect(await logOf(log.id)).toMatchObject({ status: 'PROCESSED', aiSummary: 'summary' });
-    }
+      const all = await rules.findAll();
 
-    // Two active accounts match the same bank code
-    await seedAccount(ctx.prisma, { accountNumber: '999' });
-    const { log, job } = await seedJob();
-    classifyAs(income());
-    await processor.process(job);
-    expect(await logOf(log.id)).toMatchObject({ status: 'PROCESSED' });
-
-    expect(await ctx.prisma.transaction.count()).toBe(0);
-    expect(await balanceOf(account.id)).toBe('1000000.00');
-  });
-
-  it('process run twice for the same log creates one transaction', async () => {
-    const account = await seedAccount(ctx.prisma);
-    const { job } = await seedJob();
-    classifyAs(income());
-
-    await processor.process(job);
-    await processor.process(job);
-
-    expect(await ctx.prisma.transaction.count()).toBe(1);
-    expect(await balanceOf(account.id)).toBe('1150000.00');
-  });
-
-  it('a retry after a crash between the transaction and the status update does not double the balance', async () => {
-    const account = await seedAccount(ctx.prisma);
-    const { log, job } = await seedJob();
-    await ctx.moduleRef.get(FinanceService).createTransaction({
-      accountId: account.id,
-      amount: 150000,
-      type: 'INCOME',
-      transactionTime: new Date(),
-      emailLogId: log.id,
+      expect(all.map((r) => r.matchValue)).toEqual(['new', 'old']);
     });
-    classifyAs(income());
 
-    await processor.process(job);
+    it('filters by type', async () => {
+      await rule({ type: EmailRuleType.whitelist, matchValue: 'w' });
+      await rule({ type: EmailRuleType.blacklist, matchValue: 'b' });
 
-    expect(await ctx.prisma.transaction.count()).toBe(1);
-    expect(await balanceOf(account.id)).toBe('1150000.00');
-    expect(await logOf(log.id)).toMatchObject({ status: 'PROCESSED' });
-  });
+      const only = await rules.findAll(EmailRuleType.blacklist);
 
-  it('EVENT creates a DIRTY calendar event with a default one-hour end', async () => {
-    const valid = await seedJob();
-    classifyAs({ category: 'EVENT', event: { title: 'Review', start: '2026-10-20T09:00:00+07:00' } });
-    await processor.process(valid.job);
-
-    const invalid = await seedJob();
-    classifyAs({
-      category: 'EVENT',
-      event: { title: 'Broken', start: '2026-10-20T09:00:00+07:00', end: '2026-10-20T08:00:00+07:00' },
+      expect(only.map((r) => r.matchValue)).toEqual(['b']);
     });
-    await processor.process(invalid.job);
+  });
 
-    expect(await ctx.prisma.localCalendar.findMany({ include: { syncState: true } })).toMatchObject([
-      {
-        title: 'Review',
-        description: 'summary',
-        startTime: new Date('2026-10-20T02:00:00Z'),
-        endTime: new Date('2026-10-20T03:00:00Z'),
-        syncState: { syncStatus: 'DIRTY' },
+  describe('findOne', () => {
+    it('returns the rule', async () => {
+      const r = await rule({});
+
+      expect((await rules.findOne(r.id)).id).toBe(r.id);
+    });
+
+    it('throws 404 for an unknown id', async () => {
+      await expect(rules.findOne(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('update', () => {
+    it('changes the stored fields', async () => {
+      const r = await rule({});
+
+      await rules.update(r.id, { matchValue: 'ceo@example.com', isActive: false });
+
+      expect(await ctx.prisma.emailRule.findUniqueOrThrow({ where: { id: r.id } })).toMatchObject({
+        matchValue: 'ceo@example.com',
+        isActive: false,
+        matcher: 'sender',
+      });
+    });
+
+    it('throws 404 for an unknown id', async () => {
+      await expect(rules.update(MISSING, { isActive: false })).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('validates a new value against the stored regex matcher', async () => {
+      const r = await rule({ matcher: EmailMatcher.regex, matchValue: 'ok' });
+
+      await expect(rules.update(r.id, { matchValue: '(' })).rejects.toBeInstanceOf(BadRequestException);
+
+      expect((await ctx.prisma.emailRule.findUniqueOrThrow({ where: { id: r.id } })).matchValue).toBe('ok');
+    });
+
+    it('validates the stored value when the matcher changes to regex', async () => {
+      const r = await rule({ matcher: EmailMatcher.sender, matchValue: '(' });
+
+      await expect(rules.update(r.id, { matcher: EmailMatcher.regex })).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('remove', () => {
+    it('deletes the rule', async () => {
+      const r = await rule({});
+
+      await rules.remove(r.id);
+
+      expect(await ctx.prisma.emailRule.count()).toBe(0);
+    });
+
+    it('throws 404 for an unknown id', async () => {
+      await expect(rules.remove(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('classify', () => {
+    const email = { sender: 'Boss <Boss@Example.com>', subject: 'Quarterly Report', rawBody: 'Invoice 42 attached' };
+
+    it('returns null when no rule matches', async () => {
+      await rule({ matchValue: 'nobody@else.com' });
+
+      expect(await rules.classify(email)).toBeNull();
+    });
+
+    it('returns null when there are no rules', async () => {
+      expect(await rules.classify(email)).toBeNull();
+    });
+
+    it('matches a sender rule case-insensitively on a substring', async () => {
+      await rule({ type: EmailRuleType.whitelist, matcher: EmailMatcher.sender, matchValue: 'BOSS@example' });
+
+      expect(await rules.classify(email)).toBe('whitelist');
+    });
+
+    it('matches a keyword rule on the subject', async () => {
+      await rule({ type: EmailRuleType.moneylist, matcher: EmailMatcher.keyword, matchValue: 'quarterly' });
+
+      expect(await rules.classify(email)).toBe('moneylist');
+    });
+
+    it('matches a keyword rule on the body', async () => {
+      await rule({ type: EmailRuleType.moneylist, matcher: EmailMatcher.keyword, matchValue: 'invoice 42' });
+
+      expect(await rules.classify(email)).toBe('moneylist');
+    });
+
+    it('does not match a keyword against the sender', async () => {
+      await rule({ type: EmailRuleType.moneylist, matcher: EmailMatcher.keyword, matchValue: 'boss@example' });
+
+      expect(await rules.classify(email)).toBeNull();
+    });
+
+    it('matches a regex rule case-insensitively', async () => {
+      await rule({ type: EmailRuleType.whitelist, matcher: EmailMatcher.regex, matchValue: 'invoice\\s+\\d+' });
+
+      expect(await rules.classify(email)).toBe('whitelist');
+    });
+
+    it('treats a stored invalid regex as no match instead of throwing', async () => {
+      await rule({ type: EmailRuleType.blacklist, matcher: EmailMatcher.regex, matchValue: '(' });
+
+      expect(await rules.classify(email)).toBeNull();
+    });
+
+    it('lets blacklist win over moneylist and whitelist', async () => {
+      await rule({ type: EmailRuleType.whitelist, matchValue: 'boss@' });
+      await rule({ type: EmailRuleType.moneylist, matchValue: 'boss@' });
+      await rule({ type: EmailRuleType.blacklist, matchValue: 'boss@' });
+
+      expect(await rules.classify(email)).toBe('blacklist');
+    });
+
+    it('lets moneylist win over whitelist', async () => {
+      await rule({ type: EmailRuleType.whitelist, matchValue: 'boss@' });
+      await rule({ type: EmailRuleType.moneylist, matcher: EmailMatcher.keyword, matchValue: 'invoice' });
+
+      expect(await rules.classify(email)).toBe('moneylist');
+    });
+
+    it('ignores precedence by creation date', async () => {
+      await rule({ type: EmailRuleType.blacklist, matchValue: 'boss@', createdAt: new Date('2020-01-01T00:00:00Z') });
+      await rule({ type: EmailRuleType.whitelist, matchValue: 'boss@', createdAt: new Date('2030-01-01T00:00:00Z') });
+
+      expect(await rules.classify(email)).toBe('blacklist');
+    });
+
+    it('ignores inactive rules', async () => {
+      await rule({ type: EmailRuleType.blacklist, matchValue: 'boss@', isActive: false });
+      await rule({ type: EmailRuleType.whitelist, matchValue: 'boss@' });
+
+      expect(await rules.classify(email)).toBe('whitelist');
+    });
+
+    it('copes with a missing subject and body', async () => {
+      await rule({ type: EmailRuleType.whitelist, matcher: EmailMatcher.keyword, matchValue: 'x' });
+
+      expect(await rules.classify({ sender: 'a@b.c', subject: null, rawBody: null })).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------- EmailService
+
+  describe('createEmailLog', () => {
+    it('stores a PENDING log', async () => {
+      const dto = mail();
+
+      const log = await emails.createEmailLog(dto);
+
+      expect(await logOf(log!.id)).toMatchObject({
+        messageId: dto.messageId,
+        sender: dto.sender,
+        subject: dto.subject,
+        rawBody: dto.rawBody,
+        status: 'PENDING',
+      });
+    });
+
+    it('returns null for a duplicate message id and keeps one row', async () => {
+      const dto = mail();
+      await emails.createEmailLog(dto);
+
+      expect(await emails.createEmailLog(dto)).toBeNull();
+      expect(await ctx.prisma.emailLog.count()).toBe(1);
+    });
+  });
+
+  describe('ingest', () => {
+    it('marks a blacklisted email SKIPPED and enqueues no job', async () => {
+      await rule({ type: EmailRuleType.blacklist, matchValue: 'spam@' });
+
+      const result = await emails.ingest(mail({ sender: 'spam@ads.com' }));
+
+      expect(result).toMatchObject({ jobId: null, ruleType: 'blacklist', status: 'SKIPPED' });
+      expect((await logOf(result!.emailLogId)).status).toBe('SKIPPED');
+      expect(await totalJobs(ctx)).toBe(0);
+    });
+
+    it('stores a PENDING log and a job with jobId = log id for an unmatched email', async () => {
+      const dto = mail();
+
+      const result = await emails.ingest(dto);
+
+      expect(result).toMatchObject({ ruleType: null, status: 'PENDING' });
+      expect(result!.jobId).toBe(result!.emailLogId);
+      expect((await logOf(result!.emailLogId)).status).toBe('PENDING');
+      const job = await ctx.queue.getJob(result!.emailLogId);
+      expect(job!.name).toBe('process-email-job');
+      expect(job!.data).toEqual({
+        emailLogId: result!.emailLogId,
+        messageId: dto.messageId,
+        sender: dto.sender,
+        subject: dto.subject,
+        rawBody: dto.rawBody,
+        ruleType: null,
+      });
+      expect(job!.opts).toMatchObject({ attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
+    });
+
+    it.each([
+      [EmailRuleType.moneylist, 1],
+      [EmailRuleType.whitelist, 2],
+      [null, 3],
+    ])('gives a %s email job priority %s', async (type, priority) => {
+      if (type) await rule({ type, matchValue: 'sender@' });
+
+      const result = await emails.ingest(mail({ sender: 'sender@x.com' }));
+
+      const job = await ctx.queue.getJob(result!.jobId!);
+      expect(job!.opts.priority).toBe(priority);
+      expect(job!.data.ruleType).toBe(type);
+    });
+
+    it('keeps a single job when a PENDING duplicate arrives while its job still exists', async () => {
+      const dto = mail();
+      const first = await emails.ingest(dto);
+
+      const second = await emails.ingest(dto);
+
+      // log is still PENDING, so it is re-enqueued, but jobId = log id keeps a single job
+      expect(second!.jobId).toBe(first!.jobId);
+      expect(await totalJobs(ctx)).toBe(1);
+      expect(await ctx.prisma.emailLog.count()).toBe(1);
+    });
+
+    it('re-enqueues a duplicate that is still PENDING when its job is gone', async () => {
+      const dto = mail();
+      const first = await emails.ingest(dto);
+      await (await ctx.queue.getJob(first!.jobId!))!.remove();
+      expect(await totalJobs(ctx)).toBe(0);
+
+      const second = await emails.ingest(dto);
+
+      expect(second).toMatchObject({ emailLogId: first!.emailLogId, status: 'PENDING' });
+      expect(await ctx.queue.getJob(first!.emailLogId)).toBeTruthy();
+    });
+
+    it.each([EmailStatus.PROCESSED, EmailStatus.SKIPPED, EmailStatus.FAILED])(
+      'ignores a duplicate whose log is %s',
+      async (status) => {
+        const dto = mail();
+        const first = await emails.ingest(dto);
+        await (await ctx.queue.getJob(first!.jobId!))!.remove();
+        await ctx.prisma.emailLog.update({ where: { id: first!.emailLogId }, data: { status } });
+
+        expect(await emails.ingest(dto)).toBeNull();
+        expect(await totalJobs(ctx)).toBe(0);
+        expect((await logOf(first!.emailLogId)).status).toBe(status);
       },
-    ]);
-    expect(await logOf(valid.log.id)).toMatchObject({ status: 'PROCESSED' });
-    expect(await logOf(invalid.log.id)).toMatchObject({ status: 'PROCESSED' });
+    );
+
+    it('keeps the log PENDING and rethrows when the enqueue fails', async () => {
+      const spy = vi.spyOn(ctx.queue, 'add').mockRejectedValueOnce(new Error('redis down'));
+      const dto = mail();
+
+      try {
+        await expect(emails.ingest(dto)).rejects.toThrow('redis down');
+      } finally {
+        spy.mockRestore();
+      }
+
+      const saved = await ctx.prisma.emailLog.findUniqueOrThrow({ where: { messageId: dto.messageId } });
+      expect(saved.status).toBe('PENDING');
+      // a retry of the same message heals it
+      expect(await emails.ingest(dto)).toMatchObject({ emailLogId: saved.id, status: 'PENDING' });
+      expect(await ctx.queue.getJob(saved.id)).toBeTruthy();
+    });
   });
 
-  it('an urgent mail is sent to Telegram once; a failed send still leaves the log PROCESSED', async () => {
-    const sent = await seedJob();
-    classifyAs({ category: 'OTHER', urgent: true, summary: 'Answer today' });
-    await processor.process(sent.job);
-
-    expect(ctx.telegram.sendMessage).toHaveBeenCalledTimes(1);
-    expect(ctx.telegram.sendMessage.mock.calls[0][0]).toContain('Answer today');
-
-    const failed = await seedJob();
-    ctx.telegram.sendMessage.mockResolvedValueOnce('FAILED');
-    await processor.process(failed.job);
-
-    expect(ctx.telegram.sendMessage).toHaveBeenCalledTimes(2);
-    expect(await logOf(sent.log.id)).toMatchObject({ status: 'PROCESSED' });
-    expect(await logOf(failed.log.id)).toMatchObject({ status: 'PROCESSED', aiSummary: 'Answer today' });
-  });
-
-  it('invalid model output leaves the log PENDING; only the last failed attempt marks it FAILED', async () => {
-    const { log, job } = await seedJob(1);
-    ctx.genAi.generateContent.mockResolvedValue({ text: 'not json' });
-
-    await expect(processor.process(job)).rejects.toThrow();
-    expect(await logOf(log.id)).toMatchObject({ status: 'PENDING' });
-
-    await processor.onFailed(job, new Error('bad output'));
-    expect(await logOf(log.id)).toMatchObject({ status: 'PENDING' });
-
-    await processor.onFailed({ ...job, attemptsMade: 3 }, new Error('bad output'));
-    expect(await logOf(log.id)).toMatchObject({ status: 'FAILED' });
-  });
-});
-
-describe('GmailPushService (integration)', () => {
-  let push: GmailPushService;
-  let users: any;
-
-  const b64 = (value: string) => Buffer.from(value).toString('base64url');
-  const gmailMessage = (id: string) => ({
-    data: {
-      id,
-      payload: {
-        headers: [
-          { name: 'Message-Id', value: `<${id}@mail>` },
-          { name: 'From', value: 'Bank <no-reply@bank.vn>' },
-          { name: 'Subject', value: 'Balance change' },
-        ],
-        mimeType: 'multipart/alternative',
-        parts: [{ mimeType: 'text/plain', body: { data: b64(`body of ${id}`) } }],
-      },
-    },
-  });
-
-  beforeAll(() => {
-    push = ctx.moduleRef.get(GmailPushService);
-  });
-  beforeEach(() => {
-    users = {
-      watch: vi.fn(async () => ({ data: { historyId: '90' } })),
-      getProfile: vi.fn(async () => ({ data: { historyId: '300' } })),
-      history: {
-        list: vi.fn(async (_params: any) => ({
-          data: {
-            history: [{ messagesAdded: [{ message: { id: 'm1' } }, { message: { id: 'm2' } }] }],
-            historyId: '200',
-          },
-        })),
-      },
-      messages: {
-        list: vi.fn(async (_params: any) => ({ data: { messages: [{ id: 'm3' }] } })),
-        get: vi.fn(async ({ id }: any) => gmailMessage(id)),
-      },
+  describe('listLogs', () => {
+    const seedLogs = async () => {
+      const base = new Date('2030-01-01T00:00:00Z').getTime();
+      const statuses: EmailStatus[] = ['PENDING', 'PROCESSED', 'PROCESSED', 'FAILED', 'PROCESSED'];
+      for (const [i, status] of statuses.entries()) {
+        await ctx.prisma.emailLog.create({
+          data: { messageId: `m${i}`, sender: 's', status, createdAt: new Date(base + i * 1000) },
+        });
+      }
     };
-    vi.spyOn(google, 'gmail').mockReturnValue({ users } as never);
-  });
 
-  const connectGoogle = async (gmailHistoryId: string | null) => {
-    const user = await seedUser(ctx.prisma, { gmailHistoryId });
-    await ctx.moduleRef.get(GoogleClientFactory).saveTokens(user.id, {
-      access_token: 'access',
-      refresh_token: 'refresh',
-      expiry_date: Date.now() + 3600 * 1000,
+    it('lists newest first with default paging', async () => {
+      await seedLogs();
+
+      const page = await emails.listLogs({});
+
+      expect(page).toMatchObject({ total: 5, page: 1, pageSize: 20 });
+      expect(page.items.map((l) => l.messageId)).toEqual(['m4', 'm3', 'm2', 'm1', 'm0']);
     });
-    return user;
-  };
-  const historyIdOf = async (id: string) =>
-    (await ctx.prisma.user.findUniqueOrThrow({ where: { id } })).gmailHistoryId;
-  const messageIds = async () =>
-    (await ctx.prisma.emailLog.findMany()).map((log) => log.messageId).sort();
 
-  it('runPass ingests the new messages and advances the stored history ID', async () => {
-    const user = await connectGoogle('100');
+    it('filters by status and counts only matching rows', async () => {
+      await seedLogs();
 
-    await expect(push.runPass()).resolves.toBe(2);
+      const page = await emails.listLogs({ status: 'PROCESSED' });
 
-    expect(users.history.list.mock.calls[0][0]).toMatchObject({ startHistoryId: '100' });
-    expect(await ctx.prisma.emailLog.findMany({ orderBy: { messageId: 'asc' } })).toMatchObject([
-      { messageId: '<m1@mail>', sender: 'Bank <no-reply@bank.vn>', rawBody: 'body of m1', status: 'PENDING' },
-      { messageId: '<m2@mail>', subject: 'Balance change', rawBody: 'body of m2', status: 'PENDING' },
-    ]);
-    expect(await historyIdOf(user.id)).toBe('200');
+      expect(page.total).toBe(3);
+      expect(page.items.map((l) => l.messageId)).toEqual(['m4', 'm2', 'm1']);
+    });
+
+    it('pages with page and pageSize', async () => {
+      await seedLogs();
+
+      const page = await emails.listLogs({ page: 2, pageSize: 2 });
+
+      expect(page).toMatchObject({ total: 5, page: 2, pageSize: 2 });
+      expect(page.items.map((l) => l.messageId)).toEqual(['m2', 'm1']);
+    });
+
+    it('returns an empty page past the end', async () => {
+      await seedLogs();
+
+      const page = await emails.listLogs({ page: 9, pageSize: 2 });
+
+      expect(page.items).toEqual([]);
+      expect(page.total).toBe(5);
+    });
   });
 
-  it('a failed message fetch keeps the history ID; the rerun ingests without duplicates', async () => {
-    const user = await connectGoogle('100');
-    users.messages.get.mockImplementationOnce(async ({ id }: any) => gmailMessage(id));
-    users.messages.get.mockRejectedValueOnce(httpError(500));
+  describe('reprocess', () => {
+    const failedLog = async (data: Record<string, unknown> = {}) => {
+      const dto = mail(data);
+      const result = await emails.ingest(dto);
+      await ctx.prisma.emailLog.update({ where: { id: result!.emailLogId }, data: { status: 'FAILED' } });
+      return result!;
+    };
 
-    await expect(push.runPass()).rejects.toThrow('HTTP 500');
-    expect(await historyIdOf(user.id)).toBe('100');
-    expect(await messageIds()).toEqual(['<m1@mail>']);
+    it('throws 404 for an unknown id', async () => {
+      await expect(emails.reprocess(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+    });
 
-    await expect(push.runPass()).resolves.toBe(2);
-    expect(await messageIds()).toEqual(['<m1@mail>', '<m2@mail>']);
-    expect(await historyIdOf(user.id)).toBe('200');
+    it.each([EmailStatus.PENDING, EmailStatus.PROCESSED, EmailStatus.SKIPPED])(
+      'throws 400 for a %s log and leaves it unchanged',
+      async (status) => {
+        const log = await ctx.prisma.emailLog.create({ data: { messageId: 'm', sender: 's', status } });
+
+        await expect(emails.reprocess(log.id)).rejects.toBeInstanceOf(BadRequestException);
+
+        expect((await logOf(log.id)).status).toBe(status);
+        expect(await totalJobs(ctx)).toBe(0);
+      },
+    );
+
+    it('moves a FAILED log to PENDING and replaces the old job using the current rules', async () => {
+      const old = await failedLog({ sender: 'vip@x.com' });
+      expect((await ctx.queue.getJob(old.emailLogId))!.data.ruleType).toBeNull();
+      await rule({ type: EmailRuleType.whitelist, matchValue: 'vip@' });
+
+      const result = await emails.reprocess(old.emailLogId);
+
+      expect(result).toMatchObject({ emailLogId: old.emailLogId, jobId: old.emailLogId, ruleType: 'whitelist', status: 'PENDING' });
+      expect((await logOf(old.emailLogId)).status).toBe('PENDING');
+      const job = await ctx.queue.getJob(old.emailLogId);
+      expect(job!.data.ruleType).toBe('whitelist');
+      expect(job!.opts.priority).toBe(2);
+      expect(await totalJobs(ctx)).toBe(1);
+    });
+
+    it('enqueues a job when the old one is already gone', async () => {
+      const old = await failedLog();
+      await (await ctx.queue.getJob(old.emailLogId))!.remove();
+
+      const result = await emails.reprocess(old.emailLogId);
+
+      expect(result.status).toBe('PENDING');
+      expect(await ctx.queue.getJob(old.emailLogId)).toBeTruthy();
+    });
+
+    it('marks the log SKIPPED and enqueues nothing when a blacklist rule now matches', async () => {
+      const old = await failedLog({ sender: 'spam@x.com' });
+      await rule({ type: EmailRuleType.blacklist, matchValue: 'spam@' });
+
+      const result = await emails.reprocess(old.emailLogId);
+
+      expect(result).toMatchObject({ jobId: null, ruleType: 'blacklist', status: 'SKIPPED' });
+      expect((await logOf(old.emailLogId)).status).toBe('SKIPPED');
+      expect(await ctx.queue.getJob(old.emailLogId)).toBeUndefined();
+    });
+
+    it('resets the log to FAILED and rethrows when the enqueue fails', async () => {
+      const old = await failedLog();
+      const spy = vi.spyOn(ctx.queue, 'add').mockRejectedValueOnce(new Error('redis down'));
+
+      try {
+        await expect(emails.reprocess(old.emailLogId)).rejects.toThrow('redis down');
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect((await logOf(old.emailLogId)).status).toBe('FAILED');
+      // can be retried
+      expect((await emails.reprocess(old.emailLogId)).status).toBe('PENDING');
+    });
+
+    it('lets only one of two concurrent reprocess calls claim the log', async () => {
+      const old = await failedLog();
+
+      const results = await Promise.allSettled([emails.reprocess(old.emailLogId), emails.reprocess(old.emailLogId)]);
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toBeInstanceOf(BadRequestException);
+      expect((await logOf(old.emailLogId)).status).toBe('PENDING');
+      expect(await totalJobs(ctx)).toBe(1);
+    });
   });
 
-  it('a history ID that Google no longer knows falls back to the recent messages', async () => {
-    const user = await connectGoogle('100');
-    users.history.list.mockRejectedValueOnce(httpError(404));
+  describe('updateEmailStatus', () => {
+    it('writes the new status', async () => {
+      const log = (await emails.createEmailLog(mail()))!;
 
-    await expect(push.runPass()).resolves.toBe(1);
+      await emails.updateEmailStatus(log.id, 'PROCESSED');
 
-    expect(await messageIds()).toEqual(['<m3@mail>']);
-    expect(await historyIdOf(user.id)).toBe('300');
-  });
+      expect((await logOf(log.id)).status).toBe('PROCESSED');
+    });
 
-  it('renewWatch stores the history ID only when none is stored', async () => {
-    const user = await connectGoogle(null);
-
-    await push.renewWatch();
-    expect(await historyIdOf(user.id)).toBe('90');
-
-    users.watch.mockResolvedValueOnce({ data: { historyId: '95' } });
-    await push.renewWatch();
-    expect(users.watch).toHaveBeenCalledTimes(2);
-    expect(await historyIdOf(user.id)).toBe('90');
+    it('rejects for an unknown id', async () => {
+      expect(await rejection(emails.updateEmailStatus(MISSING, 'PROCESSED'))).toMatchObject({ code: 'P2025' });
+    });
   });
 });

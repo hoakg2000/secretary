@@ -1,5 +1,6 @@
 import { FunctionCall, FunctionDeclaration, Part, Type } from '@google/genai';
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -138,25 +139,16 @@ export class AgentService implements OnModuleInit {
   }
 
   /**
-   * Character theo ID; không có ID hoặc không tìm thấy thì lấy Active Character
+   * Character theo ID; không có ID (phiên cũ đã mất Character) hoặc không tìm thấy thì null
    */
   private async loadCharacter(
     characterId?: string | null,
   ): Promise<ChatCharacter | null> {
-    const byId = characterId
-      ? await this.prisma.character.findUnique({
-          where: { id: characterId },
-          include: { personas: true },
-        })
-      : null;
-
-    return (
-      byId ??
-      (await this.prisma.character.findFirst({
-        where: { isActive: true },
-        include: { personas: true },
-      }))
-    );
+    if (!characterId) return null;
+    return this.prisma.character.findUnique({
+      where: { id: characterId },
+      include: { personas: true },
+    });
   }
 
   /**
@@ -239,9 +231,20 @@ export class AgentService implements OnModuleInit {
     const existing = dto.sessionId
       ? await this.chatSessions.resolve(userId, dto.sessionId)
       : null;
+    // Phiên cũ dùng Character đã lưu, bỏ qua dto.characterId; phiên mới bắt buộc có Character hợp lệ
+    if (!existing && !dto.characterId) {
+      throw new BadRequestException(
+        'Cần characterId khi bắt đầu phiên chat mới',
+      );
+    }
     const character = await this.loadCharacter(
-      dto.characterId ?? existing?.characterId,
+      existing ? existing.characterId : dto.characterId,
     );
+    if (!existing && !character) {
+      throw new NotFoundException(
+        `Không tìm thấy Character với ID: ${dto.characterId}`,
+      );
+    }
     const session =
       existing ??
       (await this.chatSessions.resolve(

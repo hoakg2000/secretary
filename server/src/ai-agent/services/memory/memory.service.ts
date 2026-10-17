@@ -4,6 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ListMemoryDto } from '../../dto/list-memory.dto';
 import { SaveMemoryDto } from '../../dto/save-memory.dto';
 import { SearchMemoryDto } from '../../dto/search-memory.dto';
+import { UpdateMemoryDto } from '../../dto/update-memory.dto';
 import { GenAiProvider } from '../../genai.provider';
 import { MemoryQueries } from '../../queries/memory.queries';
 
@@ -146,6 +147,36 @@ export class MemoryService {
     ]);
 
     return { items, total, page, pageSize };
+  }
+
+  /** Sửa nội dung/phân loại; đổi nội dung thì embedding + tsvector được tạo lại */
+  async updateMemory(id: string, dto: UpdateMemoryDto) {
+    const existing = await this.prisma.aiMemory.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException(`Không tìm thấy ký ức với ID: ${id}`);
+    }
+    // content null (IsOptional cho qua) = không đổi; category null = xóa phân loại (cột nullable)
+    const data = { content: dto.content ?? undefined, category: dto.category };
+
+    if (dto.content == null) {
+      return this.prisma.aiMemory.update({ where: { id }, data });
+    }
+
+    // Gọi API embedding ngoài transaction để không giữ kết nối DB khi chờ mạng
+    const embedding = await this.generateEmbedding(
+      dto.content,
+      'RETRIEVAL_DOCUMENT',
+    );
+    const vectorStr = `[${embedding.join(',')}]`;
+    const content = dto.content;
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.aiMemory.update({ where: { id }, data });
+      await tx.$executeRaw(
+        MemoryQueries.updateVectorAndTsv(id, vectorStr, content),
+      );
+      return updated;
+    });
   }
 
   async deleteMemory(id: string) {

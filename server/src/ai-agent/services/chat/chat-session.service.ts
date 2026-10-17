@@ -131,6 +131,20 @@ export class ChatSessionService {
     return { items, total, page, pageSize };
   }
 
+  /** Tin nhắn thuộc phiên của user (kèm Character của phiên); 404 nếu không có hoặc của người khác */
+  async findOwnMessage(userId: string, messageId: string) {
+    const message = await this.prisma.chatMessage.findFirst({
+      where: { id: messageId, session: { userId } },
+      include: { session: { include: { character: true } } },
+    });
+    if (!message) {
+      throw new NotFoundException(
+        `Không tìm thấy tin nhắn với ID: ${messageId}`,
+      );
+    }
+    return message;
+  }
+
   /** Xóa phiên (tin nhắn xóa theo, ký ức đã tạo từ chúng được giữ lại) */
   async deleteSession(userId: string, sessionId: string) {
     const deleted = await this.prisma.chatSession.deleteMany({

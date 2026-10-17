@@ -17,9 +17,9 @@ export class ChatStreamDto {
 
   @ApiPropertyOptional({
     description:
-      'ID nhân vật AI cụ thể (nếu không truyền sẽ dùng Active Character)',
+      'ID nhân vật AI: bắt buộc khi bắt đầu phiên mới; phiên đã có dùng nhân vật đã lưu và bỏ qua trường này',
   })
-  @IsString()
+  @IsUUID()
   @IsOptional()
   characterId?: string;
 }

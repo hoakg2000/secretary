@@ -6,18 +6,9 @@
   `DiscoveryService`, collects the decorated methods, and declares them to Gemini for function calling. There is no
   `AiToolRegistryService`.
 
-Status tags: `[Implemented]` = in the code today.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | Removed the Vietnamese copy and fixed the unclosed code fence. Paths are now `server/src/...`. Replaced the registry name `AiToolRegistryService` (does not exist) with `AgentService`. Interface now includes `dto` and `requiresConfirmation`. Examples use real tools (`get_financial_summary`, `create_financial_transaction`); the old `get_finance_summary` example is gone. |
-| 2026-10-16 | Review fix: the two examples quoted Vietnamese descriptions; they are now shortened (`'...'`). |
-
 ---
 
-## Metadata interface `[Implemented]`
+## Metadata interface
 
 ```typescript
 export interface AiToolParameterOption {
@@ -107,7 +98,4 @@ export function AiTool(options: AiToolOptions): MethodDecorator {
 
 ## Tools in the code
 
-`get_financial_summary`, `search_financial_transactions`, `create_financial_transaction` (confirmation),
-`get_calendar_events`, `create_calendar_event`, `update_calendar_event` (confirmation), `delete_calendar_event`
-(confirmation), `search_semantic_memory`, `save_user_memory`, `send_proactive_notification` (confirmation).
-See `modules/ai/ai.service.md`.
+The list of tools and their confirmation flags is in `modules/ai/ai.service.md`.

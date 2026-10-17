@@ -74,10 +74,6 @@ export class EnvironmentVariables {
   @IsString()
   FISH_AUDIO_API_KEY?: string;
 
-  @IsOptional()
-  @IsString()
-  FISH_AUDIO_DEFAULT_VOICE_ID?: string;
-
   // 32 bytes, base64 (44 ký tự). Bắt buộc khi bật Google OAuth vì token Google được mã hóa trước khi lưu
   @ValidateIf((env: EnvironmentVariables) => !!env.GOOGLE_CLIENT_ID)
   @IsBase64()

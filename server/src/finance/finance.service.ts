@@ -12,7 +12,10 @@ import { CreateBankAccountDto } from './dto/create-bank-account.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { FilterTransactionDto } from './dto/filter-transaction.dto';
+import { SummaryQueryDto } from './dto/summary-query.dto';
 import { UpdateBankAccountDto } from './dto/update-bank-account.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
+import { UpdateTransactionDto } from './dto/update-transaction.dto';
 
 @Injectable()
 export class FinanceService {
@@ -182,6 +185,16 @@ export class FinanceService {
     return category;
   }
 
+  async updateCategory(id: string, dto: UpdateCategoryDto) {
+    await this.getCategoryById(id);
+
+    // name null (IsOptional cho qua) coi như không đổi; icon/budgetLimit null = xóa (cột nullable)
+    return this.prisma.category.update({
+      where: { id },
+      data: { ...dto, name: dto.name ?? undefined },
+    });
+  }
+
   async deleteCategory(id: string) {
     await this.getCategoryById(id);
 
@@ -331,6 +344,144 @@ export class FinanceService {
     }
 
     return transaction;
+  }
+
+  /**
+   * Sửa giao dịch: hoàn tác biến động cũ trên tài khoản cũ, áp biến động mới lên tài khoản mới, trong một transaction.
+   * Dòng cũ được đọc trong transaction nên chênh lệch không tính từ dữ liệu cũ.
+   * shortcut: đọc rồi ghi ở isolation mặc định; hai lần sửa đồng thời cùng một giao dịch có thể cùng hoàn tác số cũ.
+   * Nâng khi có nhiều writer đồng thời -> SELECT ... FOR UPDATE trên dòng giao dịch.
+   */
+  async updateTransaction(id: string, dto: UpdateTransactionDto) {
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.transaction.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException(`Không tìm thấy giao dịch với ID: ${id}`);
+      }
+
+      // null (IsOptional cho qua) coi như không đổi; riêng categoryId null nghĩa là bỏ danh mục
+      const accountId = dto.accountId ?? existing.accountId;
+      const type = dto.type ?? existing.type;
+      const amount =
+        dto.amount != null ? new Prisma.Decimal(dto.amount) : existing.amount;
+      const categoryId =
+        dto.categoryId === undefined ? existing.categoryId : dto.categoryId;
+
+      const account = await tx.bankAccount.findUnique({
+        where: { id: accountId },
+      });
+      if (!account) {
+        throw new NotFoundException(
+          `Không tìm thấy tài khoản ngân hàng với ID: ${accountId}`,
+        );
+      }
+      // Chỉ chặn khi chuyển sang tài khoản ngừng hoạt động; sửa giao dịch cũ trên tài khoản đã đóng vẫn được
+      if (accountId !== existing.accountId && !account.isActive) {
+        throw new BadRequestException('Tài khoản ngân hàng đã ngừng hoạt động');
+      }
+
+      if (categoryId) {
+        const category = await tx.category.findUnique({
+          where: { id: categoryId },
+        });
+        if (!category) {
+          throw new NotFoundException(
+            `Không tìm thấy danh mục với ID: ${categoryId}`,
+          );
+        }
+        if (category.type !== type) {
+          throw new BadRequestException(
+            `Danh mục loại ${category.type} không dùng được cho giao dịch ${type}`,
+          );
+        }
+      }
+
+      await tx.bankAccount.update({
+        where: { id: existing.accountId },
+        data: {
+          cachedBalance:
+            existing.type === TransactionType.INCOME
+              ? { decrement: existing.amount }
+              : { increment: existing.amount },
+        },
+      });
+      await tx.bankAccount.update({
+        where: { id: accountId },
+        data: {
+          cachedBalance:
+            type === TransactionType.INCOME
+              ? { increment: amount }
+              : { decrement: amount },
+        },
+      });
+
+      return tx.transaction.update({
+        where: { id },
+        data: {
+          accountId,
+          categoryId,
+          amount,
+          type,
+          counterparty: dto.counterparty,
+          note: dto.note,
+          transactionTime: dto.transactionTime ?? undefined,
+        },
+        include: { account: true, category: true },
+      });
+    });
+  }
+
+  /** Tổng thu/chi theo từng loại tiền tệ (Transaction không có currency nên lấy qua tài khoản). */
+  async getSummary(dto: SummaryQueryDto) {
+    const { accountId, startDate, endDate } = dto;
+    const where: Prisma.TransactionWhereInput = {};
+    if (accountId) where.accountId = accountId;
+    if (startDate || endDate) {
+      where.transactionTime = {
+        ...(startDate && { gte: startDate }),
+        ...(endDate && { lte: endDate }),
+      };
+    }
+
+    const groups = await this.prisma.transaction.groupBy({
+      by: ['accountId', 'type'],
+      where,
+      _sum: { amount: true },
+    });
+    const accounts = await this.prisma.bankAccount.findMany({
+      where: { id: { in: [...new Set(groups.map((g) => g.accountId))] } },
+      select: { id: true, currency: true },
+    });
+    const currencyOf = new Map(accounts.map((a) => [a.id, a.currency]));
+
+    const byCurrency = new Map<
+      string,
+      { income: Prisma.Decimal; expense: Prisma.Decimal }
+    >();
+    for (const group of groups) {
+      const currency = currencyOf.get(group.accountId);
+      if (!currency) continue;
+      const entry = byCurrency.get(currency) ?? {
+        income: new Prisma.Decimal(0),
+        expense: new Prisma.Decimal(0),
+      };
+      const sum = group._sum.amount ?? new Prisma.Decimal(0);
+      if (group.type === TransactionType.INCOME) {
+        entry.income = entry.income.plus(sum);
+      } else {
+        entry.expense = entry.expense.plus(sum);
+      }
+      byCurrency.set(currency, entry);
+    }
+
+    return {
+      totals: [...byCurrency].map(([currency, { income, expense }]) => ({
+        currency,
+        income,
+        expense,
+        net: income.minus(expense),
+      })),
+    };
   }
 
   async deleteTransaction(id: string) {

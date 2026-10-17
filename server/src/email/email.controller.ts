@@ -7,18 +7,23 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseEnumPipe,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { EmailRuleType } from '@prisma/client';
 import { Public } from '../common/decorators/public.decorator';
 import { CreateEmailRuleDto } from './dto/create-email-rule.dto';
 import { EmailWebhookDto } from './dto/email-webhook.dto';
+import { ListEmailLogDto } from './dto/list-email-log.dto';
 import { PubSubPushDto } from './dto/pubsub-push.dto';
 import { UpdateEmailRuleDto } from './dto/update-email-rule.dto';
 import { EmailRuleService } from './email-rule.service';
@@ -67,6 +72,38 @@ export class EmailController {
         ? 'Đã tiếp nhận email và đẩy vào hàng đợi xử lý'
         : 'Đã tiếp nhận email, bỏ qua do khớp Blacklist',
       data: result,
+    };
+  }
+
+  // ==========================================
+  // EMAIL LOGS
+  // ==========================================
+
+  @ApiOperation({ summary: 'Danh sách email log, mới nhất trước' })
+  @Get('email/logs')
+  @HttpCode(HttpStatus.OK)
+  async listLogs(@Query() dto: ListEmailLogDto) {
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Lấy danh sách email log thành công',
+      data: await this.emailService.listLogs(dto),
+    };
+  }
+
+  @ApiOperation({ summary: 'Xử lý lại một email ở trạng thái FAILED' })
+  @ApiResponse({
+    status: 200,
+    description: 'Đã đưa email vào hàng đợi (hoặc SKIPPED nếu khớp blacklist)',
+  })
+  @ApiResponse({ status: 400, description: 'Email không ở trạng thái FAILED' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy email log' })
+  @Post('email/logs/:id/reprocess')
+  @HttpCode(HttpStatus.OK)
+  async reprocess(@Param('id') id: string) {
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Đã đưa email vào hàng đợi xử lý lại',
+      data: await this.emailService.reprocess(id),
     };
   }
 
@@ -120,10 +157,14 @@ export class EmailController {
   }
 
   @ApiOperation({ summary: 'Lấy danh sách các quy tắc lọc Email' })
+  @ApiQuery({ name: 'type', enum: EmailRuleType, required: false })
   @Get('email-rules')
   @HttpCode(HttpStatus.OK)
-  async findAllRules() {
-    const rules = await this.emailRuleService.findAll();
+  async findAllRules(
+    @Query('type', new ParseEnumPipe(EmailRuleType, { optional: true }))
+    type?: EmailRuleType,
+  ) {
+    const rules = await this.emailRuleService.findAll(type);
     return {
       statusCode: HttpStatus.OK,
       message: 'Lấy danh sách quy tắc lọc email thành công',

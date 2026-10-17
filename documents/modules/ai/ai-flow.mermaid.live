@@ -1,12 +1,4 @@
-%% AI agent module flow, drawn from server/src/ai-agent (checked 2026-10-16).
-%% Change log
-%% 2026-10-13: Redrawn from the code. Removed the Email/Finance -> RagChunkService sync (never called),
-%%             the text-embedding-004 model name, and the client-side layers. Added the confirmation branch
-%%             and the pre-turn memory retrieval.
-%% 2026-10-13: Added chat storage, drawn as Planned with dashed edges. Chat sessions and messages go to
-%%             relational tables; only a message the AI marks important reaches ai_memories.
-%% 2026-10-16: Chat storage verified in the code: edges are solid, "Planned" labels removed. Decision IDs removed.
-%% 2026-10-16: Review fixes: added the `session` and `error` frames, removed a duplicate `MemTools --> MemSvc` edge, removed `;` from two edge labels.
+%% AI agent module flow, drawn from server/src/ai-agent (checked 2026-10-17).
 flowchart TB
     Client["Client"]
 
@@ -37,12 +29,12 @@ flowchart TB
     %% Chat turn
     Client -- "1. POST /chat/stream" --> Controller
     Controller -- "2. chatStream" --> Agent
-    Agent -- "3. create or load session, check owner" --> ChatSvc
+    Agent -- "3. load session, check owner, or require characterId: 400 missing, 404 unknown" --> ChatSvc
     ChatSvc --> DbSession
     Agent -- "4. store the user message in full" --> ChatSvc
     ChatSvc -- "insert role USER" --> DbMessage
     Agent -- "5. last 20 messages as history" --> ChatSvc
-    Agent -- "6. Persona, memory_rule" --> DbChar
+    Agent -- "6. Persona, memory_rule of the session character" --> DbChar
     Agent -- "7. Pre-turn retrieval, up to 5 memories" --> MemSvc
     MemSvc -- "vector + text search" --> DbMemory
     Agent -- "8. Prompt, history, tool declarations" --> Gemini
@@ -75,11 +67,12 @@ flowchart TB
     Controller --> ChatSvc
 
     %% Memory routes
-    Client -- "POST, GET, DELETE /memories, POST /memories/search" --> Controller
+    Client -- "POST, GET, PATCH, DELETE /memories, POST /memories/search" --> Controller
     Controller --> MemSvc
 
     %% TTS
-    Client -- "POST /tts" --> Controller
+    Client -- "POST /tts with messageId" --> Controller
     Controller --> Tts
-    Tts -- "active voice_id" --> DbChar
+    Tts -- "own message, 404 if foreign" --> ChatSvc
+    Tts -- "voice_id of the session character, 400 if none" --> DbChar
     Tts -- "MP3 stream" --> Fish

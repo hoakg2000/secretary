@@ -6,8 +6,8 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../../prisma/prisma.service';
 import { TtsRequestDto } from '../../dto/tts-request.dto';
+import { ChatSessionService } from '../chat/chat-session.service';
 
 // Thông báo cố định trả về client: không lộ chi tiết lỗi nội bộ / upstream
 const TTS_FAILED = 'Lỗi khi gọi dịch vụ chuyển văn bản thành giọng nói';
@@ -17,34 +17,35 @@ export class TtsService {
   private readonly logger = new Logger(TtsService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly chatSessions: ChatSessionService,
     private readonly configService: ConfigService,
   ) {}
 
   /**
    * Gọi API Fish.audio và trả về luồng MP3 (không buffer toàn bộ)
    */
-  async textToSpeech(dto: TtsRequestDto): Promise<ReadableStream<Uint8Array>> {
+  async textToSpeech(
+    userId: string,
+    dto: TtsRequestDto,
+  ): Promise<ReadableStream<Uint8Array>> {
     const apiKey = this.configService.get<string>('FISH_AUDIO_API_KEY');
     if (!apiKey) {
       throw new ServiceUnavailableException('Dịch vụ TTS chưa được cấu hình');
     }
 
-    // Nếu chưa chọn voiceId, tìm voiceId từ Active Character rồi tới giá trị mặc định
-    let voiceId = dto.voiceId;
-    if (!voiceId) {
-      const activeCharacter = await this.prisma.character.findFirst({
-        where: { isActive: true },
-        select: { voiceId: true },
-      });
-      voiceId =
-        activeCharacter?.voiceId ||
-        this.configService.get<string>('FISH_AUDIO_DEFAULT_VOICE_ID');
-    }
+    const message = await this.chatSessions.findOwnMessage(
+      userId,
+      dto.messageId,
+    );
+    const voiceId = message.session.character?.voiceId;
     if (!voiceId) {
       throw new BadRequestException(
-        'Chưa có voiceId: truyền voiceId, đặt voice cho Active Character hoặc cấu hình FISH_AUDIO_DEFAULT_VOICE_ID',
+        'Chưa có giọng nói: Character của phiên chat chưa được đặt voiceId',
       );
+    }
+
+    if (!message.content.trim()) {
+      throw new BadRequestException('Tin nhắn không có nội dung để đọc');
     }
 
     let response: Response;
@@ -56,7 +57,7 @@ export class TtsService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          text: dto.text,
+          text: message.content,
           reference_id: voiceId,
           format: 'mp3',
         }),

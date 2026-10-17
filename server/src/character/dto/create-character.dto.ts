@@ -1,11 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsBoolean,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  MaxLength,
-} from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateCharacterDto {
   @ApiProperty({ example: 'Mari', description: 'Tên nhân vật AI' })
@@ -34,13 +28,4 @@ export class CreateCharacterDto {
   @MaxLength(2000) // nằm trong system prompt của mọi lượt chat
   @IsOptional()
   memoryRule?: string;
-
-  @ApiPropertyOptional({
-    example: false,
-    default: false,
-    description: 'Trạng thái kích hoạt',
-  })
-  @IsBoolean()
-  @IsOptional()
-  isActive?: boolean;
 }

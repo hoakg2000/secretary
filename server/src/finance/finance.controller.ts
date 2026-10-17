@@ -25,7 +25,10 @@ import { CreateBankAccountDto } from './dto/create-bank-account.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { FilterTransactionDto } from './dto/filter-transaction.dto';
+import { SummaryQueryDto } from './dto/summary-query.dto';
 import { UpdateBankAccountDto } from './dto/update-bank-account.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
+import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { FinanceService } from './finance.service';
 
 @ApiTags('Finance')
@@ -181,6 +184,23 @@ export class FinanceController {
     };
   }
 
+  @ApiOperation({ summary: 'Cập nhật danh mục thu/chi (không đổi loại)' })
+  @ApiResponse({ status: 200, description: 'Cập nhật danh mục thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy danh mục' })
+  @Patch('categories/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateCategory(
+    @Param('id') id: string,
+    @Body() dto: UpdateCategoryDto,
+  ) {
+    const data = await this.financeService.updateCategory(id, dto);
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Cập nhật danh mục thành công',
+      data,
+    };
+  }
+
   @ApiOperation({ summary: 'Xóa danh mục thu/chi' })
   @ApiResponse({ status: 200, description: 'Xóa danh mục thành công' })
   @Delete('categories/:id')
@@ -228,6 +248,22 @@ export class FinanceController {
     };
   }
 
+  @ApiOperation({
+    summary:
+      'Tổng thu/chi theo từng loại tiền tệ (lọc theo thời gian, tài khoản)',
+  })
+  @ApiResponse({ status: 200, description: 'Lấy tổng hợp thành công' })
+  @Get('summary')
+  @HttpCode(HttpStatus.OK)
+  async getSummary(@Query() query: SummaryQueryDto) {
+    const data = await this.financeService.getSummary(query);
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Lấy tổng hợp thu chi thành công',
+      data,
+    };
+  }
+
   @ApiOperation({ summary: 'Xem chi tiết giao dịch tài chính' })
   @ApiResponse({ status: 200, description: 'Lấy chi tiết thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy giao dịch' })
@@ -238,6 +274,32 @@ export class FinanceController {
     return {
       statusCode: HttpStatus.OK,
       message: 'Lấy chi tiết giao dịch thành công',
+      data,
+    };
+  }
+
+  @ApiOperation({
+    summary: 'Sửa giao dịch tài chính (tự điều chỉnh lại số dư tài khoản)',
+  })
+  @ApiResponse({ status: 200, description: 'Cập nhật giao dịch thành công' })
+  @ApiResponse({
+    status: 400,
+    description: 'Tài khoản ngừng hoạt động hoặc danh mục sai loại',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Không tìm thấy giao dịch, tài khoản hoặc danh mục',
+  })
+  @Patch('transactions/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateTransaction(
+    @Param('id') id: string,
+    @Body() dto: UpdateTransactionDto,
+  ) {
+    const data = await this.financeService.updateTransaction(id, dto);
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Cập nhật giao dịch thành công',
       data,
     };
   }

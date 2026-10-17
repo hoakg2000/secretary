@@ -4,25 +4,16 @@
 - **Description**: ingest of emails (manual and from Gmail push), rule matching, queueing, and the AI classification
   call. The queue consumer is documented in `email.worker.md`.
 
-| Class | File (under `server/src/email/`) | Role | Status |
-|-------|----------------------------------|------|--------|
-| `EmailService` | `email.service.ts` | Saves the `email_logs` row, classifies by rule, enqueues. | `[Implemented]` |
-| `EmailRuleService` | `email-rule.service.ts` | CRUD and matching of `email_rules`. | `[Implemented]` |
-| `GmailPushService` | `gmail-push.service.ts` | Pub/Sub token check, Gmail watch, history pass. | `[Implemented]` |
-| `EmailAiService` | `email-ai.service.ts` | One Gemini call per email, JSON answer, no tools. | `[Implemented]` |
-| `EmailProcessor` | `email.processor.ts` | BullMQ consumer: see `email.worker.md`. | `[Implemented]` |
+| Class | File (under `server/src/email/`) | Role |
+|-------|----------------------------------|------|
+| `EmailService` | `email.service.ts` | Saves the `email_logs` row, classifies by rule, enqueues, lists logs, reprocesses a failed one. |
+| `EmailRuleService` | `email-rule.service.ts` | CRUD and matching of `email_rules`. |
+| `GmailPushService` | `gmail-push.service.ts` | Pub/Sub token check, Gmail watch, history pass. |
+| `EmailAiService` | `email-ai.service.ts` | One Gemini call per email, JSON answer, no tools. |
+| `EmailProcessor` | `email.processor.ts` | BullMQ consumer: see `email.worker.md`. |
 
 **Tables**: `email_logs`, `email_rules`, `users` (`gmail_history_id`, Google tokens). Written downstream by the
 worker: `transactions`, `local_calendars`.
-
-Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | Rewritten from the code. Dedup is the unique `message_id` only: no SHA-256 hash, no `deduplicationHash`. Job state is in Redis, `queue_jobs` is unused. Priorities: moneylist 1, whitelist 2, no rule 3 (was MoneyList 2). Added `GmailPushService`, `EmailAiService` and the re-enqueue of a duplicate that is still `PENDING`. No AI tool in this module. |
-| 2026-10-16 | Review fix: method headings tagged `[Implemented]`. |
 
 ---
 
@@ -30,33 +21,55 @@ Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not bu
 
 Not an AI tool in any method.
 
-### 1. createEmailLog(dto) `[Implemented]`
+### 1. createEmailLog(dto)
 
 - Inserts an `email_logs` row with status `PENDING`. A unique violation on `message_id` (Prisma `P2002`) means
   "already ingested": the method returns `null`. Insert-then-catch, not check-then-insert.
 
-### 2. ingest(dto) `[Implemented]`
+### 2. ingest(dto)
 
 1. `createEmailLog`. On a duplicate, read the existing row: when it is not `PENDING`, return `null`; when it is still
    `PENDING` (an earlier call failed before queueing), continue with that row.
 2. `EmailRuleService.classify` returns `blacklist`, `moneylist`, `whitelist` or `null`.
 3. `blacklist` → status `SKIPPED`, nothing queued, `jobId: null`.
-4. Otherwise `emailQueue.add('process-email-job', …)` on queue `email-processing`: `jobId` = the email log ID (a repeat
-   add is ignored by BullMQ), `attempts: 3`, exponential backoff from 5 s, keeps the last 100 completed and 50 failed
-   jobs. BullMQ `priority`: moneylist 1, whitelist 2, no rule 3 (lower runs first).
+4. Otherwise the private `enqueue(emailLog, ruleType)` calls `emailQueue.add('process-email-job', …)` on queue
+   `email-processing`: `jobId` = the email log ID (a repeat add is ignored by BullMQ), `attempts: 3`, exponential
+   backoff from 5 s, keeps the last 100 completed and 50 failed jobs. BullMQ `priority`: moneylist 1, whitelist 2, no
+   rule 3 (lower runs first). `reprocess` uses the same method.
 5. Returns `{ emailLogId, jobId, ruleType, status }`.
 
 - **Tables**: `email_logs` (create, read, update), `email_rules` (read).
 
-### 3. updateEmailStatus(id, status) `[Implemented]`
+### 3. updateEmailStatus(id, status)
 
 - Updates `email_logs.status`.
+
+### 4. listLogs(dto)
+
+- `findMany` + `count` with an optional `status` filter, `created_at` descending, `page` default 1, `pageSize`
+  default 20 (max 50). Returns `{ items, total, page, pageSize }` with full rows, including `raw_body`.
+- **Tables**: `email_logs` (read).
+
+### 5. reprocess(id)
+
+1. `NotFoundException` when the row does not exist.
+2. `updateMany where id AND status = FAILED` set `PENDING`. Count 0 → `BadRequestException` (only `FAILED` can be
+   reprocessed). This claim also stops two concurrent calls from both queueing.
+3. Remove the old BullMQ job with the same ID (`emailQueue.getJob(id)` then `remove()`): the failed job is kept
+   (`removeOnFail: 50`) and BullMQ would ignore a new `add` with the same `jobId`.
+4. Re-classify with `EmailRuleService.classify`. `blacklist` → status `SKIPPED`, `jobId: null`. Otherwise `enqueue` and
+   return `status: PENDING`.
+5. If step 3 or 4 throws, the status is set back to `FAILED` (a failure of that update is logged) and the original error
+   is thrown.
+
+- Returns `{ emailLogId, jobId, ruleType, status }`.
+- **Tables**: `email_logs` (read, update), `email_rules` (read).
 
 ---
 
 ## EmailRuleService
 
-- `create`, `findAll` (newest first), `findOne` (`NotFoundException`), `update`, `remove`.
+- `create`, `findAll(type?)` (newest first, optional `type` filter), `findOne` (`NotFoundException`), `update`, `remove`.
 - `create` / `update`: for `matcher = regex`, `matchValue` must be at most 200 characters and compile as a regular
   expression, otherwise `BadRequestException`. Known limit: no protection against catastrophic backtracking.
 - `classify(email)`: loads active rules, keeps those that match, returns the type of highest precedence
@@ -69,7 +82,7 @@ Not an AI tool in any method.
 
 ## GmailPushService
 
-- `onApplicationBootstrap`: registers a cron at 03:00 daily and calls `renewWatch` once at startup.
+- `onApplicationBootstrap`: registers a cron at 03:00 daily (server local time, not `APP_TIMEZONE`) and calls `renewWatch` once at startup.
 - `renewWatch()`: when `GMAIL_PUBSUB_TOPIC` is set and Google is connected, calls Gmail `users.watch` on `INBOX`. Stores
   the returned history ID in `users.gmail_history_id` only when none is stored. Errors are logged, not thrown.
 - `verifyPushToken(authorization)`: 503 unless the topic, audience and service account are all configured; 401 for a

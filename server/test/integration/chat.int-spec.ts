@@ -1,400 +1,945 @@
-import { NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ChatRole } from '@prisma/client';
 import { lastValueFrom, toArray } from 'rxjs';
-import {
-  AgentService,
-  DEFAULT_MEMORY_RULE,
-  MAX_TOOL_ROUNDS,
-} from '../../src/ai-agent/services/agent/agent.service';
+import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
+import { AgentService, DEFAULT_MEMORY_RULE } from '../../src/ai-agent/services/agent/agent.service';
 import { ChatSessionService } from '../../src/ai-agent/services/chat/chat-session.service';
 import { MemoryService } from '../../src/ai-agent/services/memory/memory.service';
-import { calls, createTestModule, resetDb, seedAccount, seedUser, TestContext, text } from './harness';
+import {
+  MISSING,
+  calls,
+  createTestModule,
+  rejection,
+  httpError,
+  resetState,
+  seedAccount,
+  seedCharacter,
+  seedUser,
+  text,
+  type TestContext,
+} from './harness';
 
-let ctx: TestContext;
-let sessions: ChatSessionService;
-let userId: string;
+const BASE = new Date('2024-01-01T00:00:00Z').getTime();
 
-beforeAll(async () => {
-  ctx = await createTestModule();
-  sessions = ctx.moduleRef.get(ChatSessionService);
-});
-beforeEach(async () => {
-  await resetDb(ctx.prisma);
-  ctx.genAi.script.length = 0;
-  ctx.genAi.create.mockClear();
-  ctx.genAi.sendMessageStream.mockClear();
-  userId = (await seedUser(ctx.prisma)).id;
-});
-afterAll(() => ctx.moduleRef.close());
-
-// role breaks a same-millisecond tie: USER sorts before MODEL
-const messagesOf = (sessionId?: string) =>
-  ctx.prisma.chatMessage.findMany({
-    where: { sessionId },
-    orderBy: [{ createdAt: 'asc' }, { role: 'asc' }],
-  });
-
-describe('ChatSessionService (integration)', () => {
-  /** Messages one second apart so the order never depends on the random ID */
-  const seedMessages = async (sessionId: string, rows: [role: 'USER' | 'MODEL', content: string][]) => {
-    const created = [];
-    for (const [index, [role, content]] of rows.entries()) {
-      created.push(
-        await ctx.prisma.chatMessage.create({
-          data: { sessionId, role, content, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)) },
-        }),
-      );
-    }
-    return created;
-  };
-
-  it('resolve creates a session with a title of at most 80 characters and hides foreign sessions', async () => {
-    const other = await seedUser(ctx.prisma);
-    const created = await sessions.resolve(userId, undefined, null, 'x'.repeat(200));
-
-    expect(await ctx.prisma.chatSession.findUnique({ where: { id: created.id } })).toMatchObject({
-      userId,
-      title: 'x'.repeat(80),
-    });
-    await expect(sessions.resolve(userId, created.id)).resolves.toMatchObject({ id: created.id });
-    await expect(sessions.resolve(other.id, created.id)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(sessions.resolve(userId, randomUUID())).rejects.toBeInstanceOf(NotFoundException);
-    expect(await ctx.prisma.chatSession.count()).toBe(1);
-  });
-
-  it('appendMessage stores the row and advances lastMessageAt', async () => {
-    const past = new Date(Date.now() - 60 * 60 * 1000);
-    const session = await ctx.prisma.chatSession.create({ data: { userId, lastMessageAt: past } });
-
-    const message = await sessions.appendMessage(session.id, 'MODEL', 'hello', [{ tool: 't' }]);
-
-    expect(await ctx.prisma.chatMessage.findUnique({ where: { id: message.id } })).toMatchObject({
-      sessionId: session.id,
-      role: 'MODEL',
-      content: 'hello',
-      toolCalls: [{ tool: 't' }],
-    });
-    const stored = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
-    expect(stored.lastMessageAt.getTime()).toBeGreaterThan(past.getTime());
-  });
-
-  it('recentHistory is oldest first, before the cursor, without empty rows, starting at a user turn', async () => {
-    const session = await sessions.resolve(userId);
-    const rows = await seedMessages(session.id, [
-      ['MODEL', 'orphan answer'],
-      ['USER', 'first question'],
-      ['MODEL', ''],
-      ['MODEL', 'first answer'],
-      ['USER', 'second question'],
-      ['USER', 'current'],
-      ['MODEL', 'later'],
-    ]);
-    const cursor = rows[5].id;
-    const user = (value: string) => ({ role: 'user', parts: [{ text: value }] });
-    const model = (value: string) => ({ role: 'model', parts: [{ text: value }] });
-
-    expect(await sessions.recentHistory(session.id, cursor)).toEqual([
-      user('first question'),
-      model('first answer'),
-      user('second question'),
-    ]);
-    // limit 2 = the two rows before the cursor; the leading model turn is dropped
-    expect(await sessions.recentHistory(session.id, cursor, 2)).toEqual([user('second question')]);
-  });
-
-  it('listSessions is scoped to the user and ordered by lastMessageAt; listMessages pages and checks ownership', async () => {
-    const other = await seedUser(ctx.prisma);
-    const day = (d: number) => new Date(Date.UTC(2026, 9, d));
-    const older = await ctx.prisma.chatSession.create({ data: { userId, lastMessageAt: day(1) } });
-    const newer = await ctx.prisma.chatSession.create({ data: { userId, lastMessageAt: day(2) } });
-    await ctx.prisma.chatSession.create({ data: { userId: other.id, lastMessageAt: day(3) } });
-    const rows = await seedMessages(older.id, [
-      ['USER', 'a'],
-      ['MODEL', 'b'],
-      ['USER', 'c'],
-    ]);
-
-    const list = await sessions.listSessions(userId);
-    expect(list.total).toBe(2);
-    expect(list.items.map((s) => s.id)).toEqual([newer.id, older.id]);
-    expect((await sessions.listSessions(userId, 2, 1)).items.map((s) => s.id)).toEqual([older.id]);
-
-    const page = await sessions.listMessages(userId, older.id, 2, 2);
-    expect(page).toMatchObject({ total: 3, page: 2, pageSize: 2 });
-    expect(page.items.map((m) => m.id)).toEqual([rows[2].id]);
-    await expect(sessions.listMessages(other.id, older.id)).rejects.toBeInstanceOf(NotFoundException);
-  });
-
-  it('deleteSession cascades messages, keeps the linked memory and ignores foreign sessions', async () => {
-    const other = await seedUser(ctx.prisma);
-    const session = await sessions.resolve(userId);
-    const saved = await ctx.moduleRef.get(MemoryService).saveMemory({ content: 'likes tea' });
-    const message = await sessions.appendMessage(session.id, 'USER', 'I like tea');
-    await sessions.linkMemory(message.id, saved.id);
-
-    await expect(sessions.deleteSession(other.id, session.id)).rejects.toBeInstanceOf(NotFoundException);
-    expect(await ctx.prisma.chatMessage.count()).toBe(1);
-
-    await sessions.deleteSession(userId, session.id);
-
-    expect(await ctx.prisma.chatSession.count()).toBe(0);
-    expect(await ctx.prisma.chatMessage.count()).toBe(0);
-    expect(await ctx.prisma.aiMemory.count()).toBe(1);
-  });
-});
-
-describe('AgentService (integration)', () => {
+describe('chat integration', () => {
+  let ctx: TestContext;
+  let sessions: ChatSessionService;
   let agent: AgentService;
+  let memory: MemoryService;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    ctx = await createTestModule();
+    sessions = ctx.moduleRef.get(ChatSessionService);
     agent = ctx.moduleRef.get(AgentService);
+    memory = ctx.moduleRef.get(MemoryService);
   });
 
-  const run = async (dto: { message: string; sessionId?: string; characterId?: string }) => {
-    const stream = await agent.chatStream(userId, dto);
-    const frames = await lastValueFrom(stream.pipe(toArray()));
-    return frames.map((frame) => JSON.parse(frame.data));
-  };
-  const types = (frames: any[]) => frames.map((frame) => frame.type);
-  /** functionResponse parts sent back to the model on the n-th send (0 = the user message) */
-  const sent = (n: number) =>
-    ctx.genAi.sendMessageStream.mock.calls[n][0].message.map((part: any) => part.functionResponse);
-  const systemInstruction = (n: number) => ctx.genAi.create.mock.calls[n][0].config.systemInstruction;
-  const balanceOf = async (id: string) =>
-    (await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id } })).cachedBalance.toFixed(2);
+  afterAll(() => ctx.close());
 
-  it('a plain text turn stores the USER and MODEL rows; the next turn sends them as history', async () => {
-    ctx.genAi.script.push([text('Xin '), text('chào!')], [text('Lại chào')]);
-
-    const frames = await run({ message: 'hello' });
-    const { sessionId } = frames[0];
-
-    expect(frames).toEqual([
-      { type: 'session', sessionId },
-      { type: 'text', content: 'Xin ' },
-      { type: 'text', content: 'chào!' },
-      { type: 'done' },
-    ]);
-    expect(await messagesOf(sessionId)).toMatchObject([
-      { role: 'USER', content: 'hello' },
-      { role: 'MODEL', content: 'Xin chào!', toolCalls: null },
-    ]);
-    expect(ctx.genAi.create.mock.calls[0][0].history).toEqual([]);
-
-    await run({ message: 'again', sessionId });
-
-    expect(ctx.genAi.create.mock.calls[1][0].history).toEqual([
-      { role: 'user', parts: [{ text: 'hello' }] },
-      { role: 'model', parts: [{ text: 'Xin chào!' }] },
-    ]);
-    expect(await ctx.prisma.chatSession.count()).toBe(1);
-    expect(await ctx.prisma.chatMessage.count()).toBe(4);
+  beforeEach(async () => {
+    await resetState(ctx);
+    // nothing here enqueues, but keep the real worker away from the queue anyway
+    await ctx.queue.pause();
   });
 
-  it('an unknown or foreign session is rejected before any model call', async () => {
-    const other = await seedUser(ctx.prisma);
-    const foreign = await sessions.resolve(other.id);
-
-    for (const sessionId of [randomUUID(), foreign.id]) {
-      await expect(agent.chatStream(userId, { message: 'hello', sessionId })).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-    }
-
-    expect(ctx.genAi.create).not.toHaveBeenCalled();
-    expect(await ctx.prisma.chatMessage.count()).toBe(0);
-    expect(await ctx.prisma.chatSession.count()).toBe(1);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it('a read tool runs against the database and its result is stored as plain JSON', async () => {
-    const account = await seedAccount(ctx.prisma, { cachedBalance: 1234.5 });
-    ctx.genAi.script.push(
-      [calls({ id: 'c1', name: 'get_financial_summary', args: {} })],
-      [text('You have 1234.5')],
-    );
-
-    const frames = await run({ message: 'how much do I have?' });
-
-    expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'text', 'done']);
-    const result = {
-      summary: { totals: [{ currency: 'VND', totalBalance: '1234.5', totalAccounts: 1 }] },
-      accounts: [{ id: account.id, cachedBalance: '1234.5', currency: 'VND' }],
-    };
-    expect(sent(1)[0]).toMatchObject({ id: 'c1', name: 'get_financial_summary', response: { result } });
-    const [, model] = await messagesOf(frames[0].sessionId);
-    expect(model).toMatchObject({
-      role: 'MODEL',
-      content: 'You have 1234.5',
-      toolCalls: [{ tool: 'get_financial_summary', args: {}, result }],
+  const makeSession = async (userId: string, data: Record<string, unknown> = {}) =>
+    ctx.prisma.chatSession.create({ data: { userId, ...data } as any });
+  /** message created `index` seconds after BASE so the order is deterministic */
+  const makeMessage = (sessionId: string, index: number, role: ChatRole, content: string) =>
+    ctx.prisma.chatMessage.create({
+      data: { sessionId, role, content, createdAt: new Date(BASE + index * 1000) },
     });
-  });
+  const messagesOf = (sessionId: string) =>
+    ctx.prisma.chatMessage.findMany({ where: { sessionId }, orderBy: { createdAt: 'asc' } });
 
-  it('a write tool waits for confirmation: nothing is written until confirmAction, and only once', async () => {
-    const account = await seedAccount(ctx.prisma);
-    const propose = async () => {
-      ctx.genAi.script.push(
-        [
-          calls({
-            name: 'create_financial_transaction',
-            args: { accountId: account.id, amount: 5000, type: 'EXPENSE', note: 'coffee' },
-          }),
-        ],
-        [text('Please confirm')],
-      );
-      const frames = await run({ message: 'I spent 5000 on coffee' });
-      return frames.find((frame) => frame.type === 'confirmation_required');
-    };
+  // ---------------------------------------------------------------- ChatSessionService
 
-    const confirmed = await propose();
-    expect(confirmed).toMatchObject({ tool: 'create_financial_transaction' });
-    expect(sent(1)[0].response).toEqual({ status: 'awaiting_user_confirmation' });
-    expect(await ctx.prisma.transaction.count()).toBe(0);
-    expect(await balanceOf(account.id)).toBe('1000000.00');
+  describe('ChatSessionService', () => {
+    describe('resolve', () => {
+      it('creates a session for the user with the character and a title cut to 80 characters', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await seedCharacter(ctx.prisma);
 
-    await agent.confirmAction(confirmed.actionId);
-    expect(await ctx.prisma.transaction.findMany()).toMatchObject([
-      { accountId: account.id, type: 'EXPENSE', note: 'coffee' },
-    ]);
-    expect(await balanceOf(account.id)).toBe('995000.00');
-    await expect(agent.confirmAction(confirmed.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        const session = await sessions.resolve(user.id, undefined, character.id, 'x'.repeat(100));
 
-    const discarded = await propose();
-    agent.discardAction(discarded.actionId);
-    await expect(agent.confirmAction(discarded.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        const saved = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
+        expect(saved).toMatchObject({ userId: user.id, characterId: character.id, title: 'x'.repeat(80) });
+      });
 
-    expect(await ctx.prisma.transaction.count()).toBe(1);
-    expect(await balanceOf(account.id)).toBe('995000.00');
-  });
+      it('returns the user own session', async () => {
+        const user = await seedUser(ctx.prisma);
+        const own = await makeSession(user.id);
 
-  it('invalid tool arguments are reported to the model and nothing is written', async () => {
-    const account = await seedAccount(ctx.prisma);
-    ctx.genAi.script.push(
-      [
-        calls({
-          name: 'create_financial_transaction',
-          args: { accountId: account.id, amount: -5, type: 'EXPENSE', emailLogId: randomUUID() },
-        }),
-      ],
-      [text('Sorry')],
-    );
+        const session = await sessions.resolve(user.id, own.id);
 
-    const frames = await run({ message: 'spend -5' });
+        expect(session.id).toBe(own.id);
+        expect(await ctx.prisma.chatSession.count()).toBe(1);
+      });
 
-    expect(types(frames)).toEqual(['session', 'text', 'done']);
-    expect(sent(1)[0].response).toMatchObject({ error: 'invalid arguments' });
-    expect(await ctx.prisma.transaction.count()).toBe(0);
-    expect(await balanceOf(account.id)).toBe('1000000.00');
-    const [, model] = await messagesOf(frames[0].sessionId);
-    expect(model.toolCalls).toMatchObject([{ error: 'invalid arguments' }]);
-  });
+      it('returns 404 for another user session', async () => {
+        const owner = await seedUser(ctx.prisma);
+        const other = await seedUser(ctx.prisma);
+        const foreign = await makeSession(owner.id);
 
-  it('save_user_memory stores CHAT memories and links only the first one to the user message', async () => {
-    ctx.genAi.script.push(
-      [
-        calls(
-          { name: 'save_user_memory', args: { content: 'likes tea', source: 'MANUAL' } },
-          { name: 'save_user_memory', args: { content: 'has a cat', category: 'FACT' } },
-        ),
-      ],
-      [text('Noted')],
-    );
+        await expect(sessions.resolve(other.id, foreign.id)).rejects.toBeInstanceOf(NotFoundException);
+      });
 
-    const frames = await run({ message: 'I like tea and I have a cat' });
+      it('returns 404 for an unknown session', async () => {
+        const user = await seedUser(ctx.prisma);
 
-    const memories = await ctx.prisma.aiMemory.findMany({ orderBy: { content: 'desc' } });
-    expect(memories).toMatchObject([
-      { content: 'likes tea', source: 'CHAT', category: 'GENERAL' },
-      { content: 'has a cat', source: 'CHAT', category: 'FACT' },
-    ]);
-    const [user, model] = await messagesOf(frames[0].sessionId);
-    expect(user.memoryId).toBe(memories[0].id);
-    expect(model.memoryId).toBeNull();
-  });
-
-  it('uses the explicit character, then the session character, then the active one; memories reach the prompt', async () => {
-    const active = await ctx.prisma.character.create({
-      data: {
-        name: 'Active',
-        isActive: true,
-        memoryRule: 'RULE-ACTIVE',
-        personas: { create: { type: 'TONE', value: 'PERSONA-ACTIVE' } },
-      },
-    });
-    const other = await ctx.prisma.character.create({
-      data: { name: 'Other', personas: { create: { type: 'TONE', value: 'PERSONA-OTHER' } } },
-    });
-    await ctx.moduleRef.get(MemoryService).saveMemory({ content: 'user likes green tea' });
-    const characterOf = async (id: string) =>
-      (await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id } })).characterId;
-
-    const [fallback] = await run({ message: 'hello' });
-    expect(systemInstruction(0)).toContain('PERSONA-ACTIVE');
-    expect(systemInstruction(0)).toContain('RULE-ACTIVE');
-    expect(systemInstruction(0)).toContain('- user likes green tea');
-    expect(await characterOf(fallback.sessionId)).toBe(active.id);
-
-    const [explicit] = await run({ message: 'hello', characterId: other.id });
-    expect(systemInstruction(1)).toContain('PERSONA-OTHER');
-    expect(systemInstruction(1)).toContain(DEFAULT_MEMORY_RULE);
-    expect(systemInstruction(1)).not.toContain('PERSONA-ACTIVE');
-    expect(await characterOf(explicit.sessionId)).toBe(other.id);
-
-    await run({ message: 'again', sessionId: explicit.sessionId });
-    expect(systemInstruction(2)).toContain('PERSONA-OTHER');
-  });
-
-  it('a failing model stream ends with an error frame and keeps only the USER row', async () => {
-    ctx.genAi.sendMessageStream.mockRejectedValueOnce(new Error('model down'));
-
-    const frames = await run({ message: 'hello' });
-
-    expect(frames.at(-1)).toEqual({ type: 'error', message: 'model down' });
-    expect(await messagesOf(frames[0].sessionId)).toMatchObject([{ role: 'USER', content: 'hello' }]);
-  });
-
-  it('unsubscribing mid-stream stores no MODEL row', async () => {
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    let finished = () => {};
-    const streamEnded = new Promise<void>((resolve) => (finished = resolve));
-    ctx.genAi.sendMessageStream.mockImplementationOnce(async () =>
-      (async function* () {
-        try {
-          yield text('partial');
-          await gate;
-          yield text(' answer');
-        } finally {
-          finished();
-        }
-      })(),
-    );
-
-    const stream = await agent.chatStream(userId, { message: 'hello' });
-    await new Promise<void>((resolve) => {
-      const subscription = stream.subscribe((frame) => {
-        if (JSON.parse(frame.data).type === 'text') {
-          subscription.unsubscribe();
-          resolve();
-        }
+        await expect(sessions.resolve(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
       });
     });
-    release();
-    await streamEnded;
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(await messagesOf()).toMatchObject([{ role: 'USER', content: 'hello' }]);
+    describe('appendMessage', () => {
+      it('stores the message verbatim with its tool calls and moves last_message_at forward', async () => {
+        const user = await seedUser(ctx.prisma);
+        const old = new Date('2020-01-01T00:00:00Z');
+        const session = await makeSession(user.id, { lastMessageAt: old });
+
+        const message = await sessions.appendMessage(session.id, ChatRole.MODEL, '  hi there  ', [{ tool: 't' }]);
+
+        const saved = await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: message.id } });
+        expect(saved).toMatchObject({
+          sessionId: session.id,
+          role: 'MODEL',
+          content: '  hi there  ',
+          toolCalls: [{ tool: 't' }],
+        });
+        const after = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
+        expect(after.lastMessageAt.getTime()).toBeGreaterThan(old.getTime() + 86_400_000);
+      });
+
+      it('stores no tool calls when none are given', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+
+        const message = await sessions.appendMessage(session.id, ChatRole.USER, 'hello');
+
+        expect((await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: message.id } })).toolCalls).toBeNull();
+      });
+
+      it('writes nothing for an unknown session', async () => {
+        expect(await rejection(sessions.appendMessage(MISSING, ChatRole.USER, 'x'))).toMatchObject({ code: 'P2003' });
+
+        expect(await ctx.prisma.chatMessage.count()).toBe(0);
+      });
+    });
+
+    describe('recentHistory', () => {
+      it('returns the 20 messages before the given one, oldest first, in Gemini format', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        const rows = [];
+        for (let i = 0; i < 25; i++) {
+          rows.push(await makeMessage(session.id, i, i % 2 === 0 ? ChatRole.USER : ChatRole.MODEL, `m${i}`));
+        }
+
+        const history = await sessions.recentHistory(session.id, rows[24].id);
+
+        expect(history).toHaveLength(20);
+        expect(history[0]).toEqual({ role: 'user', parts: [{ text: 'm4' }] });
+        expect(history[1]).toEqual({ role: 'model', parts: [{ text: 'm5' }] });
+        expect(history[19]).toEqual({ role: 'model', parts: [{ text: 'm23' }] });
+      });
+
+      it('honours a smaller limit and excludes the cursor and newer messages', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        const rows = [];
+        for (let i = 0; i < 6; i++) {
+          rows.push(await makeMessage(session.id, i, i % 2 === 0 ? ChatRole.USER : ChatRole.MODEL, `m${i}`));
+        }
+
+        const history = await sessions.recentHistory(session.id, rows[4].id, 2);
+
+        expect(history.map((t) => t.parts[0].text)).toEqual(['m2', 'm3']);
+      });
+
+      it('drops rows with empty text', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        await makeMessage(session.id, 0, ChatRole.USER, 'q');
+        await makeMessage(session.id, 1, ChatRole.MODEL, '');
+        await makeMessage(session.id, 2, ChatRole.USER, 'q2');
+        const current = await makeMessage(session.id, 3, ChatRole.USER, 'now');
+
+        const history = await sessions.recentHistory(session.id, current.id);
+
+        expect(history.map((t) => t.parts[0].text)).toEqual(['q', 'q2']);
+      });
+
+      it('drops leading model turns so the history starts with the user', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        await makeMessage(session.id, 0, ChatRole.MODEL, 'orphan');
+        await makeMessage(session.id, 1, ChatRole.USER, 'q');
+        await makeMessage(session.id, 2, ChatRole.MODEL, 'a');
+        const current = await makeMessage(session.id, 3, ChatRole.USER, 'now');
+
+        const history = await sessions.recentHistory(session.id, current.id);
+
+        expect(history.map((t) => t.parts[0].text)).toEqual(['q', 'a']);
+      });
+
+      it('returns an empty history when there is no user turn', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        await makeMessage(session.id, 0, ChatRole.MODEL, 'only model');
+        const current = await makeMessage(session.id, 1, ChatRole.USER, 'now');
+
+        expect(await sessions.recentHistory(session.id, current.id)).toEqual([]);
+      });
+
+      it('ignores the messages of other sessions', async () => {
+        const user = await seedUser(ctx.prisma);
+        const a = await makeSession(user.id);
+        const b = await makeSession(user.id);
+        await makeMessage(b.id, 0, ChatRole.USER, 'other session');
+        await makeMessage(a.id, 1, ChatRole.USER, 'mine');
+        const current = await makeMessage(a.id, 2, ChatRole.USER, 'now');
+
+        const history = await sessions.recentHistory(a.id, current.id);
+
+        expect(history.map((t) => t.parts[0].text)).toEqual(['mine']);
+      });
+    });
+
+    describe('linkMemory', () => {
+      it('sets chat_messages.memory_id', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        const message = await makeMessage(session.id, 0, ChatRole.USER, 'remember this');
+        const saved = await memory.saveMemory({ content: 'remember this' });
+
+        await sessions.linkMemory(message.id, saved.id);
+
+        expect((await ctx.prisma.chatMessage.findUniqueOrThrow({ where: { id: message.id } })).memoryId).toBe(saved.id);
+      });
+
+      it('fails for a memory already linked to another message (memory_id is unique)', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        const first = await makeMessage(session.id, 0, ChatRole.USER, 'a');
+        const second = await makeMessage(session.id, 1, ChatRole.USER, 'b');
+        const saved = await memory.saveMemory({ content: 'm' });
+        await sessions.linkMemory(first.id, saved.id);
+
+        expect(await rejection(sessions.linkMemory(second.id, saved.id))).toMatchObject({ code: 'P2002' });
+      });
+    });
+
+    describe('listSessions', () => {
+      it('lists only the user sessions, latest message first, with total', async () => {
+        const user = await seedUser(ctx.prisma);
+        const other = await seedUser(ctx.prisma);
+        await makeSession(user.id, { title: 'old', lastMessageAt: new Date(BASE) });
+        await makeSession(user.id, { title: 'new', lastMessageAt: new Date(BASE + 2000) });
+        await makeSession(user.id, { title: 'mid', lastMessageAt: new Date(BASE + 1000) });
+        await makeSession(other.id, { title: 'foreign', lastMessageAt: new Date(BASE + 5000) });
+
+        const result = await sessions.listSessions(user.id);
+
+        expect(result.items.map((s) => s.title)).toEqual(['new', 'mid', 'old']);
+        expect(result).toMatchObject({ total: 3, page: 1, pageSize: 20 });
+      });
+
+      it('pages through the sessions', async () => {
+        const user = await seedUser(ctx.prisma);
+        for (let i = 0; i < 3; i++) await makeSession(user.id, { title: `s${i}`, lastMessageAt: new Date(BASE + i * 1000) });
+
+        const page2 = await sessions.listSessions(user.id, 2, 2);
+
+        expect(page2.items.map((s) => s.title)).toEqual(['s0']);
+        expect(page2).toMatchObject({ total: 3, page: 2, pageSize: 2 });
+      });
+
+      it('returns an empty list for a user without sessions', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        expect(await sessions.listSessions(user.id)).toMatchObject({ items: [], total: 0 });
+      });
+    });
+
+    describe('listMessages', () => {
+      it('lists the messages oldest first with paging', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        await makeMessage(session.id, 2, ChatRole.USER, 'third');
+        await makeMessage(session.id, 0, ChatRole.USER, 'first');
+        await makeMessage(session.id, 1, ChatRole.MODEL, 'second');
+
+        const all = await sessions.listMessages(user.id, session.id);
+        const page = await sessions.listMessages(user.id, session.id, 2, 2);
+
+        expect(all.items.map((m) => m.content)).toEqual(['first', 'second', 'third']);
+        expect(all.total).toBe(3);
+        expect(page.items.map((m) => m.content)).toEqual(['third']);
+      });
+
+      it('returns 404 for another user session', async () => {
+        const owner = await seedUser(ctx.prisma);
+        const other = await seedUser(ctx.prisma);
+        const foreign = await makeSession(owner.id);
+
+        await expect(sessions.listMessages(other.id, foreign.id)).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('returns 404 for an unknown session', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        await expect(sessions.listMessages(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    describe('findOwnMessage', () => {
+      it('returns the message with its session and character', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await seedCharacter(ctx.prisma, { name: 'Mika' });
+        const session = await makeSession(user.id, { characterId: character.id });
+        const message = await makeMessage(session.id, 0, ChatRole.MODEL, 'hello');
+
+        const found = await sessions.findOwnMessage(user.id, message.id);
+
+        expect(found.content).toBe('hello');
+        expect(found.session.character?.name).toBe('Mika');
+      });
+
+      it('returns 404 for another user message', async () => {
+        const owner = await seedUser(ctx.prisma);
+        const other = await seedUser(ctx.prisma);
+        const session = await makeSession(owner.id);
+        const message = await makeMessage(session.id, 0, ChatRole.MODEL, 'secret');
+
+        await expect(sessions.findOwnMessage(other.id, message.id)).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('returns 404 for an unknown message', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        await expect(sessions.findOwnMessage(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    describe('deleteSession', () => {
+      it('deletes the session and its messages but keeps the memories created from them', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        const message = await makeMessage(session.id, 0, ChatRole.USER, 'remember');
+        const saved = await memory.saveMemory({ content: 'remember' });
+        await sessions.linkMemory(message.id, saved.id);
+
+        expect(await sessions.deleteSession(user.id, session.id)).toEqual({ success: true });
+
+        expect(await ctx.prisma.chatSession.count()).toBe(0);
+        expect(await ctx.prisma.chatMessage.count()).toBe(0);
+        expect(await ctx.prisma.aiMemory.count({ where: { id: saved.id } })).toBe(1);
+      });
+
+      it('returns 404 for another user session and deletes nothing', async () => {
+        const owner = await seedUser(ctx.prisma);
+        const other = await seedUser(ctx.prisma);
+        const session = await makeSession(owner.id);
+        await makeMessage(session.id, 0, ChatRole.USER, 'keep');
+
+        await expect(sessions.deleteSession(other.id, session.id)).rejects.toBeInstanceOf(NotFoundException);
+
+        expect(await ctx.prisma.chatSession.count()).toBe(1);
+        expect(await ctx.prisma.chatMessage.count()).toBe(1);
+      });
+
+      it('returns 404 for an unknown session', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        await expect(sessions.deleteSession(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
   });
 
-  it(`more than ${MAX_TOOL_ROUNDS} tool rounds end with an error frame`, async () => {
-    await seedAccount(ctx.prisma);
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      ctx.genAi.script.push([calls({ name: 'get_financial_summary', args: {} })]);
-    }
+  // ---------------------------------------------------------------- AgentService.chatStream
 
-    const frames = await run({ message: 'loop' });
+  describe('AgentService.chatStream', () => {
+    const stream = async (userId: string, dto: Partial<ChatStreamDto>) => {
+      const observable = await agent.chatStream(userId, { message: 'hello', ...dto } as ChatStreamDto);
+      const events = await lastValueFrom(observable.pipe(toArray()));
+      return events.map((e) => JSON.parse(e.data) as { type: string; [key: string]: any });
+    };
+    const types = (frames: { type: string }[]) => frames.map((f) => f.type);
+    const instructionOf = (callIndex = 0) => ctx.genAi.create.mock.calls[callIndex][0].config.systemInstruction as string;
+    const withCharacter = (data: Record<string, unknown> = {}) =>
+      ctx.prisma.character.create({
+        data: {
+          name: 'Mika',
+          voiceId: 'v1',
+          personas: { create: [{ type: 'TONE', value: 'playful and warm' }, { type: 'IDENTITY', value: 'a cat girl' }] },
+          ...data,
+        },
+      });
 
-    expect(frames.at(-1).type).toBe('error');
-    expect(ctx.genAi.sendMessageStream).toHaveBeenCalledTimes(MAX_TOOL_ROUNDS + 1);
-    expect(await messagesOf(frames[0].sessionId)).toMatchObject([{ role: 'USER', content: 'loop' }]);
+    describe('session handling', () => {
+      it('emits the session frame first, then text, then done, and persists both messages', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push([text('Hi '), text('there')]);
+
+        const frames = await stream(user.id, { message: 'hello bot', characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'text', 'text', 'done']);
+        expect(frames.filter((f) => f.type === 'text').map((f) => f.content)).toEqual(['Hi ', 'there']);
+        const session = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: frames[0].sessionId } });
+        expect(session).toMatchObject({ userId: user.id, characterId: character.id, title: 'hello bot' });
+        const stored = await messagesOf(session.id);
+        expect(stored.map((m) => [m.role, m.content])).toEqual(
+          expect.arrayContaining([
+            ['USER', 'hello bot'],
+            ['MODEL', 'Hi there'],
+          ]),
+        );
+        expect(stored).toHaveLength(2);
+        expect(stored.find((m) => m.role === 'MODEL')!.toolCalls).toBeNull();
+      });
+
+      it('rejects a new session without characterId with 400 and creates nothing', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        await expect(stream(user.id, {})).rejects.toBeInstanceOf(BadRequestException);
+
+        expect(await ctx.prisma.chatSession.count()).toBe(0);
+        expect(ctx.genAi.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects an unknown characterId with 404, creates nothing and does not call the model', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        await expect(stream(user.id, { characterId: MISSING })).rejects.toBeInstanceOf(NotFoundException);
+
+        expect(await ctx.prisma.chatSession.count()).toBe(0);
+        expect(await ctx.prisma.chatMessage.count()).toBe(0);
+        expect(ctx.genAi.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects an unknown sessionId with 404 without calling the model', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        await expect(stream(user.id, { sessionId: MISSING })).rejects.toBeInstanceOf(NotFoundException);
+
+        expect(ctx.genAi.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects another user session with 404 and stores nothing', async () => {
+        const owner = await seedUser(ctx.prisma);
+        const other = await seedUser(ctx.prisma);
+        const session = await makeSession(owner.id);
+
+        await expect(stream(other.id, { sessionId: session.id })).rejects.toBeInstanceOf(NotFoundException);
+
+        expect(await ctx.prisma.chatMessage.count()).toBe(0);
+        expect(ctx.genAi.create).not.toHaveBeenCalled();
+      });
+
+      it('continues an existing session with its stored character and ignores dto.characterId', async () => {
+        const user = await seedUser(ctx.prisma);
+        const stored = await withCharacter({ name: 'StoredName' });
+        const other = await withCharacter({ name: 'OtherName' });
+        const session = await makeSession(user.id, { characterId: stored.id });
+        ctx.genAi.script.push([text('ok')]);
+
+        const frames = await stream(user.id, { sessionId: session.id, characterId: other.id });
+
+        expect(frames[0]).toEqual({ type: 'session', sessionId: session.id });
+        expect(instructionOf()).toContain('StoredName');
+        expect(instructionOf()).not.toContain('OtherName');
+        expect(await ctx.prisma.chatSession.count()).toBe(1);
+      });
+
+      it('continues an existing session without characterId in the request', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        ctx.genAi.script.push([text('ok')]);
+
+        const frames = await stream(user.id, { sessionId: session.id });
+
+        expect(types(frames)).toEqual(['session', 'text', 'done']);
+      });
+
+      it('passes the earlier messages of the session as history', async () => {
+        const user = await seedUser(ctx.prisma);
+        const session = await makeSession(user.id);
+        await makeMessage(session.id, 0, ChatRole.USER, 'earlier question');
+        await makeMessage(session.id, 1, ChatRole.MODEL, 'earlier answer');
+        ctx.genAi.script.push([text('ok')]);
+
+        await stream(user.id, { sessionId: session.id, message: 'follow up' });
+
+        expect(ctx.genAi.create.mock.calls[0][0].history).toEqual([
+          { role: 'user', parts: [{ text: 'earlier question' }] },
+          { role: 'model', parts: [{ text: 'earlier answer' }] },
+        ]);
+        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledWith({ message: 'follow up' });
+      });
+
+      it('moves last_message_at forward', async () => {
+        const user = await seedUser(ctx.prisma);
+        const old = new Date('2020-01-01T00:00:00Z');
+        const session = await makeSession(user.id, { lastMessageAt: old });
+
+        await stream(user.id, { sessionId: session.id });
+
+        const after = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
+        expect(after.lastMessageAt.getTime()).toBeGreaterThan(old.getTime() + 86_400_000);
+      });
+    });
+
+    describe('system instruction', () => {
+      it('contains the character name, its personas and the custom memory rule', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter({ memoryRule: 'Only remember birthdays.' });
+
+        await stream(user.id, { characterId: character.id });
+
+        const instruction = instructionOf();
+        expect(instruction).toContain('Tên nhân vật: Mika');
+        expect(instruction).toContain('[TONE]: playful and warm');
+        expect(instruction).toContain('[IDENTITY]: a cat girl');
+        expect(instruction).toContain('Only remember birthdays.');
+        expect(instruction).not.toContain(DEFAULT_MEMORY_RULE);
+      });
+
+      it('uses the default memory rule when the character has none', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter({ memoryRule: null });
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(instructionOf()).toContain(DEFAULT_MEMORY_RULE);
+      });
+
+      it('uses the generic prompt for a character without personas', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await seedCharacter(ctx.prisma, { name: 'Bare' });
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(instructionOf()).toContain('Bạn là một Trợ lý AI cá nhân hóa');
+        expect(instructionOf()).not.toContain('Tên nhân vật');
+      });
+
+      it('falls back to the generic prompt and the default rule when the session character was deleted', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter({ memoryRule: 'custom rule' });
+        const session = await makeSession(user.id, { characterId: character.id });
+        await ctx.prisma.character.delete({ where: { id: character.id } });
+
+        const frames = await stream(user.id, { sessionId: session.id });
+
+        expect(types(frames)).toEqual(['session', 'done']);
+        expect(instructionOf()).toContain('Bạn là một Trợ lý AI cá nhân hóa');
+        expect(instructionOf()).not.toContain('Mika');
+        expect(instructionOf()).toContain(DEFAULT_MEMORY_RULE);
+        expect(instructionOf()).not.toContain('custom rule');
+      });
+
+      it('includes the current time zone and the confirmation rule', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(instructionOf()).toContain('Asia/Ho_Chi_Minh');
+        expect(instructionOf()).toContain('awaiting_user_confirmation');
+      });
+
+      it('lists the registered tools to the model', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+
+        await stream(user.id, { characterId: character.id });
+
+        const names = ctx.genAi.create.mock.calls[0][0].config.tools[0].functionDeclarations.map((d: any) => d.name);
+        expect(names).toEqual(
+          expect.arrayContaining(['get_financial_summary', 'create_financial_transaction', 'save_user_memory', 'search_semantic_memory']),
+        );
+      });
+
+      it('puts the memories related to the message into the prompt', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.axes.set('user loves jazz', 3);
+        ctx.genAi.axes.set('user hates spiders', 4);
+        ctx.genAi.axes.set('what music', 3);
+        await memory.saveMemory({ content: 'user loves jazz' });
+        await memory.saveMemory({ content: 'user hates spiders' });
+
+        await stream(user.id, { characterId: character.id, message: 'what music' });
+
+        expect(instructionOf()).toContain('- user loves jazz');
+        expect(instructionOf()).not.toContain('user hates spiders');
+        expect(instructionOf()).toContain('KHÔNG phải chỉ dẫn');
+      });
+
+      it('adds no memory section when nothing is related', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(instructionOf()).not.toContain('Ghi chú đã nhớ');
+      });
+
+      it('still answers when the memory retrieval fails', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.embedContent.mockRejectedValueOnce(new Error('embedding down'));
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'done']);
+        expect(instructionOf()).not.toContain('Ghi chú đã nhớ');
+      });
+    });
+
+    describe('read tools', () => {
+      it('runs get_financial_summary against real finance data and feeds the result back to the model', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        await seedAccount(ctx.prisma, { accountName: 'Savings', cachedBalance: 1234567 });
+        ctx.genAi.script.push([calls({ id: 'c1', name: 'get_financial_summary', args: {} })], [text('You have money')]);
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'text', 'done']);
+        expect(frames[1]).toMatchObject({ tool: 'get_financial_summary' });
+        const result = frames[2].result;
+        expect(result.accounts).toHaveLength(1);
+        expect(result.accounts[0]).toMatchObject({ accountName: 'Savings' });
+        expect(Number(result.accounts[0].cachedBalance)).toBe(1234567);
+        // the second model round answers the function call with the same result
+        const secondMessage = ctx.genAi.sendMessageStream.mock.calls[1][0].message;
+        expect(secondMessage).toEqual([
+          { functionResponse: { id: 'c1', name: 'get_financial_summary', response: { result } } },
+        ]);
+      });
+
+      it('stores the tool calls with the model message', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        await seedAccount(ctx.prisma);
+        ctx.genAi.script.push([calls({ name: 'get_financial_summary', args: {} })], [text('done')]);
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
+        expect(model.content).toBe('done');
+        expect(model.toolCalls).toMatchObject([{ tool: 'get_financial_summary', result: { accounts: [{ accountName: 'Main' }] } }]);
+      });
+
+      it('answers all function calls of one round in a single message', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push(
+          [calls({ id: 'a', name: 'get_financial_summary', args: {} }, { id: 'b', name: 'get_financial_summary', args: {} })],
+          [text('ok')],
+        );
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledTimes(2);
+        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message.map((p: any) => p.functionResponse.id)).toEqual(['a', 'b']);
+      });
+
+      it('reports an unknown tool to the model instead of failing the turn', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push([calls({ id: 'x', name: 'does_not_exist', args: {} })], [text('sorry')]);
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'text', 'done']);
+        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+          error: 'unknown tool: does_not_exist',
+        });
+      });
+
+      it('reports invalid arguments to the model and does not ask for confirmation', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push(
+          [calls({ id: 'x', name: 'create_financial_transaction', args: { amount: -5, unexpected: true } })],
+          [text('sorry')],
+        );
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'text', 'done']);
+        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toMatchObject({
+          error: 'invalid arguments',
+        });
+      });
+    });
+
+    describe('write tools and confirmation', () => {
+      const proposeTransaction = async (accountId: string) => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push(
+          [calls({ id: 'w1', name: 'create_financial_transaction', args: { accountId, amount: 50000, type: 'EXPENSE', note: 'lunch' } })],
+          [text('Please confirm')],
+        );
+        const frames = await stream(user.id, { characterId: character.id });
+        const confirmation = frames.find((f) => f.type === 'confirmation_required')!;
+        return { user, frames, confirmation };
+      };
+
+      it('emits confirmation_required with an actionId and writes nothing', async () => {
+        const account = await seedAccount(ctx.prisma, { cachedBalance: 1000000 });
+
+        const { frames, confirmation } = await proposeTransaction(account.id);
+
+        expect(types(frames)).toEqual(['session', 'confirmation_required', 'text', 'done']);
+        expect(confirmation).toMatchObject({ tool: 'create_financial_transaction', args: { accountId: account.id, amount: 50000 } });
+        expect(typeof confirmation.actionId).toBe('string');
+        expect(await ctx.prisma.transaction.count()).toBe(0);
+        expect(Number((await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id: account.id } })).cachedBalance)).toBe(1000000);
+        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+          status: 'awaiting_user_confirmation',
+        });
+      });
+
+      it('stores the action id in the model message tool calls', async () => {
+        const account = await seedAccount(ctx.prisma);
+
+        const { frames, confirmation } = await proposeTransaction(account.id);
+
+        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
+        expect(model.toolCalls).toMatchObject([{ tool: 'create_financial_transaction', actionId: confirmation.actionId }]);
+      });
+
+      it('confirmAction executes the stored command exactly once', async () => {
+        const account = await seedAccount(ctx.prisma, { cachedBalance: 1000000 });
+        const { confirmation } = await proposeTransaction(account.id);
+
+        const result = await agent.confirmAction(confirmation.actionId);
+
+        expect(result.tool).toBe('create_financial_transaction');
+        expect(await ctx.prisma.transaction.count()).toBe(1);
+        expect(await ctx.prisma.transaction.findFirstOrThrow()).toMatchObject({ accountId: account.id, type: 'EXPENSE', note: 'lunch' });
+        expect(Number((await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id: account.id } })).cachedBalance)).toBe(950000);
+
+        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        expect(await ctx.prisma.transaction.count()).toBe(1);
+      });
+
+      it('confirmAction surfaces a failing command and does not allow a retry', async () => {
+        const account = await seedAccount(ctx.prisma);
+        const { confirmation } = await proposeTransaction(account.id);
+        await ctx.prisma.bankAccount.update({ where: { id: account.id }, data: { isActive: false } });
+
+        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(BadRequestException);
+
+        expect(await ctx.prisma.transaction.count()).toBe(0);
+        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('discardAction drops the command; it cannot be confirmed afterwards', async () => {
+        const account = await seedAccount(ctx.prisma);
+        const { confirmation } = await proposeTransaction(account.id);
+
+        expect(agent.discardAction(confirmation.actionId)).toEqual({ success: true });
+
+        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        expect(await ctx.prisma.transaction.count()).toBe(0);
+        expect(() => agent.discardAction(confirmation.actionId)).toThrow(NotFoundException);
+      });
+
+      it('rejects an unknown action id on confirm and discard', async () => {
+        await expect(agent.confirmAction(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+        expect(() => agent.discardAction(MISSING)).toThrow(NotFoundException);
+      });
+
+      it('rejects an action after its 5 minute lifetime', async () => {
+        const account = await seedAccount(ctx.prisma);
+        const { confirmation } = await proposeTransaction(account.id);
+
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1000);
+
+        await expect(agent.confirmAction(confirmation.actionId)).rejects.toBeInstanceOf(NotFoundException);
+        expect(await ctx.prisma.transaction.count()).toBe(0);
+      });
+
+      it('accepts an action just inside its lifetime', async () => {
+        const account = await seedAccount(ctx.prisma);
+        const { confirmation } = await proposeTransaction(account.id);
+
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(Date.now() + 5 * 60 * 1000 - 5000);
+
+        await agent.confirmAction(confirmation.actionId);
+        expect(await ctx.prisma.transaction.count()).toBe(1);
+      });
+    });
+
+    describe('tool round limit', () => {
+      const readRound = () => [calls({ name: 'get_financial_summary', args: {} })];
+
+      it('stops after 5 tool rounds with an error frame and stores no model message', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        for (let i = 0; i < 6; i++) ctx.genAi.script.push(readRound());
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(frames.at(-1)).toMatchObject({ type: 'error' });
+        expect(frames.at(-1)!.message).toContain('5');
+        expect(types(frames)).not.toContain('done');
+        expect(ctx.genAi.sendMessageStream).toHaveBeenCalledTimes(6);
+        const stored = await messagesOf(frames[0].sessionId);
+        expect(stored.map((m) => m.role)).toEqual(['USER']);
+      });
+
+      it('allows exactly 5 tool rounds followed by an answer', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        for (let i = 0; i < 5; i++) ctx.genAi.script.push(readRound());
+        ctx.genAi.script.push([text('finally')]);
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(frames.at(-1)).toEqual({ type: 'done' });
+        expect(types(frames)).not.toContain('error');
+        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
+        expect(model.content).toBe('finally');
+        expect(model.toolCalls).toHaveLength(5);
+      });
+    });
+
+    describe('model failure', () => {
+      it('emits an error frame, keeps the user message and stores no model message', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.sendMessageStream.mockRejectedValueOnce(httpError(500));
+
+        const frames = await stream(user.id, { characterId: character.id, message: 'are you there' });
+
+        expect(types(frames)).toEqual(['session', 'error']);
+        expect(frames[1].message).toBe('HTTP 500');
+        const stored = await messagesOf(frames[0].sessionId);
+        expect(stored.map((m) => [m.role, m.content])).toEqual([['USER', 'are you there']]);
+      });
+
+      it('does not store a half answer when the stream breaks after some text', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.sendMessageStream.mockImplementationOnce(async () =>
+          (async function* () {
+            yield text('partial ');
+            throw new Error('stream broke');
+          })(),
+        );
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'text', 'error']);
+        const stored = await messagesOf(frames[0].sessionId);
+        expect(stored.map((m) => m.role)).toEqual(['USER']);
+      });
+    });
+
+    describe('ordering of writes', () => {
+      it('stores the user message before the model is called and the model answer only at the end', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        let seenAtModelCall: string[] = [];
+        ctx.genAi.sendMessageStream.mockImplementationOnce(async () => {
+          seenAtModelCall = (await ctx.prisma.chatMessage.findMany()).map((m) => `${m.role}:${m.content}`);
+          return (async function* () {
+            yield text('answer');
+            // still no model message while the stream is open
+            seenAtModelCall.push(`open:${await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } })}`);
+          })();
+        });
+
+        await stream(user.id, { characterId: character.id, message: 'question' });
+
+        expect(seenAtModelCall).toEqual(['USER:question', 'open:0']);
+        expect(await ctx.prisma.chatMessage.count({ where: { role: 'MODEL' } })).toBe(1);
+      });
+    });
+
+    describe('save_user_memory', () => {
+      it('creates CHAT memories and links only the first one to the user message', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push(
+          [
+            calls(
+              { id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea', category: 'PREFERENCE' } },
+              { id: 'm2', name: 'save_user_memory', args: { content: 'user has a dog' } },
+            ),
+          ],
+          [text('noted')],
+        );
+
+        const frames = await stream(user.id, { characterId: character.id, message: 'I like tea and I have a dog' });
+
+        expect(types(frames)).toEqual(['session', 'tool_call', 'tool_result', 'tool_call', 'tool_result', 'text', 'done']);
+        const tea = await ctx.prisma.aiMemory.findFirstOrThrow({ where: { content: 'user likes tea' } });
+        const dog = await ctx.prisma.aiMemory.findFirstOrThrow({ where: { content: 'user has a dog' } });
+        expect(tea).toMatchObject({ source: 'CHAT', category: 'PREFERENCE' });
+        expect(dog).toMatchObject({ source: 'CHAT', category: 'GENERAL' });
+        const linked = await ctx.prisma.chatMessage.findMany({ where: { memoryId: { not: null } } });
+        expect(linked).toHaveLength(1);
+        expect(linked[0]).toMatchObject({ role: 'USER', content: 'I like tea and I have a dog', memoryId: tea.id });
+      });
+
+      it('does not link anything when the memory could not be saved', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        ctx.genAi.script.push([calls({ id: 'm1', name: 'save_user_memory', args: { content: 'user likes tea' } })], [text('hmm')]);
+        // pre-turn retrieval uses the first embedding call, the tool uses the second
+        ctx.genAi.embedContent.mockImplementationOnce(async () => ({ embeddings: [{ values: Array.from({ length: 1536 }, () => 0) }] }));
+        ctx.genAi.embedContent.mockRejectedValueOnce(new Error('embedding down'));
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'tool_call', 'text', 'done']);
+        expect(ctx.genAi.sendMessageStream.mock.calls[1][0].message[0].functionResponse.response).toEqual({
+          error: 'embedding down',
+        });
+        expect(await ctx.prisma.aiMemory.count()).toBe(0);
+        expect(await ctx.prisma.chatMessage.count({ where: { memoryId: { not: null } } })).toBe(0);
+      });
+    });
+
+    describe('client disconnect', () => {
+      it('stops the loop, keeps the user message and stores no model message', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        const run = vi.spyOn(agent as any, 'runChat');
+        ctx.genAi.sendMessageStream.mockImplementationOnce(async () =>
+          (async function* () {
+            yield text('first chunk');
+            yield text('second chunk');
+          })(),
+        );
+        const observable = await agent.chatStream(user.id, { message: 'hi', characterId: character.id } as ChatStreamDto);
+        const received: any[] = [];
+
+        // the session frame is emitted synchronously on subscribe; runChat only continues after an await
+        const subscription = observable.subscribe((event) => received.push(JSON.parse(event.data)));
+        subscription.unsubscribe();
+        // wait for the whole turn to end, so a missing cancel guard would have stored a MODEL message by now
+        await (run.mock.results[0].value as Promise<unknown>).catch(() => undefined);
+
+        expect(received.map((f) => f.type)).toEqual(['session']);
+        const session = await ctx.prisma.chatSession.findFirstOrThrow();
+        expect((await messagesOf(session.id)).map((m) => m.role)).toEqual(['USER']);
+      });
+    });
   });
 });

@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -28,6 +29,7 @@ import { ListMemoryDto } from './dto/list-memory.dto';
 import { SaveMemoryDto } from './dto/save-memory.dto';
 import { SearchMemoryDto } from './dto/search-memory.dto';
 import { TtsRequestDto } from './dto/tts-request.dto';
+import { UpdateMemoryDto } from './dto/update-memory.dto';
 import { AgentService } from './services/agent/agent.service';
 import { ChatSessionService } from './services/chat/chat-session.service';
 import { MemoryService } from './services/memory/memory.service';
@@ -70,6 +72,22 @@ export class AiAgentController {
     };
   }
 
+  @ApiOperation({
+    summary: 'Sửa ký ức AI (đổi nội dung sẽ tạo lại embedding)',
+  })
+  @ApiResponse({ status: 200, description: 'Cập nhật ký ức thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy ký ức' })
+  @Patch('memories/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateMemory(@Param('id') id: string, @Body() dto: UpdateMemoryDto) {
+    const data = await this.memoryService.updateMemory(id, dto);
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Cập nhật ký ức thành công',
+      data,
+    };
+  }
+
   @ApiOperation({ summary: 'Xóa một ký ức AI' })
   @ApiResponse({ status: 200, description: 'Xóa ký ức thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy ký ức' })
@@ -108,7 +126,14 @@ export class AiAgentController {
     status: 200,
     description: 'Bắt đầu luồng Server-Sent Events thành công',
   })
-  @ApiResponse({ status: 404, description: 'Không tìm thấy phiên chat' })
+  @ApiResponse({
+    status: 400,
+    description: 'Thiếu characterId khi bắt đầu phiên chat mới',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Không tìm thấy phiên chat hoặc Character',
+  })
   // POST để gửi được body (EventSource/GET không có body)
   @Sse('chat/stream', { method: RequestMethod.POST })
   async chatStream(
@@ -224,11 +249,23 @@ export class AiAgentController {
       'Chuyển câu thoại văn bản thành file âm thanh MP3 Stream (Fish.audio)',
   })
   @ApiResponse({ status: 200, description: 'Chuyển đổi TTS thành công' })
+  @ApiResponse({
+    status: 400,
+    description: 'Character của phiên chat chưa có voiceId',
+  })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy tin nhắn' })
   @ApiResponse({ status: 503, description: 'Dịch vụ TTS chưa được cấu hình' })
   @Post('tts')
   @HttpCode(HttpStatus.OK)
-  async textToSpeech(@Body() dto: TtsRequestDto, @Res() res: Response) {
-    const audioStream = await this.ttsService.textToSpeech(dto);
+  async textToSpeech(
+    @Req() req: Request & { user: { userId: string } },
+    @Body() dto: TtsRequestDto,
+    @Res() res: Response,
+  ) {
+    const audioStream = await this.ttsService.textToSpeech(
+      req.user.userId,
+      dto,
+    );
 
     res.set({
       'Content-Type': 'audio/mpeg',

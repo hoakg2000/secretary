@@ -1,9 +1,15 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
-import { EmailRuleType, EmailStatus, Prisma } from '@prisma/client';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { EmailLog, EmailRuleType, EmailStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailWebhookDto } from './dto/email-webhook.dto';
+import { ListEmailLogDto } from './dto/list-email-log.dto';
 import { EmailRuleService } from './email-rule.service';
 import type { ProcessEmailJobData } from './email.processor';
 
@@ -86,7 +92,18 @@ export class EmailService {
       };
     }
 
-    const job = await this.emailQueue.add(
+    const job = await this.enqueue(emailLog, ruleType);
+
+    return {
+      emailLogId: emailLog.id,
+      jobId: job.id ?? null,
+      ruleType,
+      status: EmailStatus.PENDING,
+    };
+  }
+
+  private enqueue(emailLog: EmailLog, ruleType: EmailRuleType | null) {
+    return this.emailQueue.add(
       'process-email-job',
       {
         emailLogId: emailLog.id,
@@ -105,13 +122,73 @@ export class EmailService {
         removeOnFail: 50,
       },
     );
+  }
 
-    return {
-      emailLogId: emailLog.id,
-      jobId: job.id ?? null,
-      ruleType,
-      status: EmailStatus.PENDING,
-    };
+  /** Danh sách email log, mới nhất trước */
+  async listLogs(dto: ListEmailLogDto) {
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+    const where = { ...(dto.status && { status: dto.status }) };
+
+    const [items, total] = await Promise.all([
+      this.prisma.emailLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.emailLog.count({ where }),
+    ]);
+
+    return { items, total, page, pageSize };
+  }
+
+  /** Xử lý lại một email FAILED: phân loại lại rồi đưa vào hàng đợi (hoặc SKIPPED nếu khớp blacklist) */
+  async reprocess(id: string) {
+    const emailLog = await this.prisma.emailLog.findUnique({ where: { id } });
+    if (!emailLog) {
+      throw new NotFoundException(`Không tìm thấy email log với ID: ${id}`);
+    }
+
+    const claimed = await this.prisma.emailLog.updateMany({
+      where: { id, status: EmailStatus.FAILED },
+      data: { status: EmailStatus.PENDING },
+    });
+    if (claimed.count === 0) {
+      throw new BadRequestException(
+        'Chỉ xử lý lại được email ở trạng thái FAILED',
+      );
+    }
+
+    try {
+      // Job lỗi cũ vẫn được giữ (removeOnFail) với cùng jobId -> add sẽ bị bỏ qua nếu không xóa
+      await (await this.emailQueue.getJob(id))?.remove();
+
+      const ruleType = await this.emailRuleService.classify(emailLog);
+      if (ruleType === EmailRuleType.blacklist) {
+        await this.updateEmailStatus(id, EmailStatus.SKIPPED);
+        return {
+          emailLogId: id,
+          jobId: null,
+          ruleType,
+          status: EmailStatus.SKIPPED,
+        };
+      }
+
+      const job = await this.enqueue(emailLog, ruleType);
+      return {
+        emailLogId: id,
+        jobId: job.id ?? null,
+        ruleType,
+        status: EmailStatus.PENDING,
+      };
+    } catch (error) {
+      // Trả về FAILED để có thể reprocess lại, tránh kẹt PENDING không có job
+      await this.updateEmailStatus(id, EmailStatus.FAILED).catch((e) =>
+        this.logger.error(`Không đặt lại FAILED cho email log ${id}:`, e),
+      );
+      throw error;
+    }
   }
 
   /**

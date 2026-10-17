@@ -1,19 +1,12 @@
 # Secretary — Documents
 
-When a document and the code disagree, the code wins. Every document has a change log; rows are chronological.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | First version: index of the documents. |
-| 2026-10-16 | Review fix: added the `modules/proactive/` entry. |
+When a document and the code disagree, the code wins. Documents describe what the code does today; what is not built is listed in `summary.md` section 3. Git history is the change record.
 
 ## Index
 
 | File | Content |
 |------|---------|
-| `summary.md` | Product description; every feature tagged `[Implemented]`, `[Planned]` or `[De-scoped]`. |
+| `summary.md` | Product description, repository folders, and the list of planned and dropped work. |
 | `api.md` | HTTP routes of the server: path, auth, purpose. Swagger at `/api/docs` has the shapes. |
 | `db.md` | Database tables, columns, indexes and `onDelete` rules; the schema reference. |
 | `environment.md` | Environment variables: required, optional, feature-gated, tests only, seed only. |

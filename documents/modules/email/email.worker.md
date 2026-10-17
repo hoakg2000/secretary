@@ -8,15 +8,6 @@
 - **Tables**: `email_logs` (read, update), `bank_accounts` (read), `transactions` and `local_calendars` (written through
   `FinanceService` and `CalendarService`).
 
-Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not built.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-16 | Rewritten from the code. Queue is `email-processing` (was `email-processing-queue`); class is `EmailProcessor`. Job state is not written to `queue_jobs`. Every queued email is classified by the model (rule type only picks the prompt). Removed the 120 s job timeout (not set in code). Added the "already PROCESSED" skip, account matching, the `FAILED` rule and the urgent notice. |
-| 2026-10-16 | Review fix: `accountNumber` is an exact match; only `bankCode` is case-insensitive. |
-
 ---
 
 ## Configuration
@@ -25,7 +16,7 @@ Status tags: `[Implemented]` = in the code today. `[Planned]` = designed, not bu
 |----------|-------|
 | Queue | `email-processing` |
 | Concurrency | `BULLMQ_CONCURRENCY` (default 3), applied at application bootstrap |
-| Attempts | 3, set by `EmailService.ingest` |
+| Attempts | 3, set by `EmailService.enqueue` (used by `ingest` and `reprocess`) |
 | Backoff | exponential, first delay 5 s |
 | Job ID | the `email_logs` ID: one job per email log |
 | Retention | last 100 completed, last 50 failed jobs |
@@ -66,4 +57,5 @@ Job data `ProcessEmailJobData`: `emailLogId`, `messageId`, `sender`, `subject?`,
 ## Failure handling
 
 `@OnWorkerEvent('failed')` logs each failure. After the last attempt (3) it sets `email_logs.status = FAILED`; an error in that
-update is logged and does not hide the original one.
+update is logged and does not hide the original one. A `FAILED` email can be queued again with
+`POST /email/logs/:id/reprocess` (`email.service.md`).

@@ -1,264 +1,733 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { google } from 'googleapis';
 import { GoogleClientFactory } from '../../src/auth/google-client.factory';
 import { CalendarSyncService } from '../../src/calendar/calendar-sync.service';
 import { CalendarService } from '../../src/calendar/calendar.service';
-import { createTestModule, httpError, resetDb, seedUser, TestContext } from './harness';
+import { CalendarTools } from '../../src/calendar/calendar.tools';
+import { googleError, MISSING, createTestModule, resetState, seedEvent, seedGoogleUser, type TestContext } from './harness';
 
-const at = (hour: number, minute = 0) => new Date(Date.UTC(2026, 9, 15, hour, minute));
-const event = (overrides: any = {}) => ({
-  title: 'Meeting',
-  startTime: at(9),
-  endTime: at(10),
-  ...overrides,
-});
+const at = (iso: string) => new Date(iso);
 
-let ctx: TestContext;
-let calendar: CalendarService;
-
-beforeAll(async () => {
-  ctx = await createTestModule();
-  calendar = ctx.moduleRef.get(CalendarService);
-});
-beforeEach(() => resetDb(ctx.prisma));
-afterAll(() => ctx.moduleRef.close());
-
-const stateOf = (localEventId: string) =>
-  ctx.prisma.calendarSyncState.findUnique({ where: { localEventId } });
-
-describe('CalendarService (integration)', () => {
-  it('createEvent creates a DIRTY sync state and rejects an invalid range', async () => {
-    const created = await calendar.createEvent(event());
-    expect(await stateOf(created.id)).toMatchObject({ syncStatus: 'DIRTY', googleEventId: null });
-
-    await expect(calendar.createEvent(event({ endTime: at(9) }))).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
-    expect(await ctx.prisma.localCalendar.count()).toBe(1);
-    expect(await ctx.prisma.calendarSyncState.count()).toBe(1);
-  });
-
-  it('getEvents returns overlapping events ordered by start, without soft-deleted ones', async () => {
-    const late = await calendar.createEvent(event({ startTime: at(11), endTime: at(12) }));
-    const early = await calendar.createEvent(event());
-    const deleted = await calendar.createEvent(event());
-    await ctx.prisma.localCalendar.update({
-      where: { id: deleted.id },
-      data: { deletedAt: new Date() },
-    });
-
-    const ids = async (query: any) => (await calendar.getEvents(query)).map((e) => e.id);
-
-    expect(await ids({})).toEqual([early.id, late.id]);
-    // Both bounds are inclusive
-    expect(await ids({ fromDate: at(10), toDate: at(11) })).toEqual([early.id, late.id]);
-    expect(await ids({ fromDate: at(10, 1), toDate: at(10, 59) })).toEqual([]);
-    expect(await ids({ fromDate: at(10, 1) })).toEqual([late.id]);
-    expect(await ids({ toDate: at(10, 59) })).toEqual([early.id]);
-  });
-
-  it('updateEvent marks the sync state DIRTY and clears remindedAt only when the start changes', async () => {
-    const created = await calendar.createEvent(event());
-    const syncedAt = new Date(Date.now() - 60_000);
-    await ctx.prisma.localCalendar.update({
-      where: { id: created.id },
-      data: {
-        remindedAt: new Date(),
-        syncState: { update: { syncStatus: 'SYNCED', updatedAt: syncedAt } },
-      },
-    });
-
-    await calendar.updateEvent(created.id, { title: 'Renamed' });
-
-    const state = await stateOf(created.id);
-    expect(state?.syncStatus).toBe('DIRTY');
-    expect(state?.updatedAt.getTime()).toBeGreaterThan(syncedAt.getTime());
-    expect(
-      (await ctx.prisma.localCalendar.findUniqueOrThrow({ where: { id: created.id } })).remindedAt,
-    ).not.toBeNull();
-
-    // Partial update: the new end is checked against the stored start
-    await expect(calendar.updateEvent(created.id, { endTime: at(8) })).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
-
-    await calendar.updateEvent(created.id, { startTime: at(9, 30) });
-    expect(await ctx.prisma.localCalendar.findUniqueOrThrow({ where: { id: created.id } })).toMatchObject({
-      title: 'Renamed',
-      startTime: at(9, 30),
-      endTime: at(10),
-      remindedAt: null,
-    });
-  });
-
-  it('deleteEvent hard-deletes a never-pushed event and soft-deletes a pushed one', async () => {
-    const local = await calendar.createEvent(event());
-    const pushed = await calendar.createEvent(event());
-    await ctx.prisma.calendarSyncState.update({
-      where: { localEventId: pushed.id },
-      data: { googleEventId: 'g1', syncStatus: 'SYNCED' },
-    });
-
-    await calendar.deleteEvent(local.id);
-    await calendar.deleteEvent(pushed.id);
-
-    expect(await ctx.prisma.localCalendar.findUnique({ where: { id: local.id } })).toBeNull();
-    expect(await stateOf(local.id)).toBeNull();
-    expect(
-      (await ctx.prisma.localCalendar.findUniqueOrThrow({ where: { id: pushed.id } })).deletedAt,
-    ).not.toBeNull();
-    expect(await stateOf(pushed.id)).toMatchObject({ syncStatus: 'DIRTY', googleEventId: 'g1' });
-    await expect(calendar.getEventById(pushed.id)).rejects.toBeInstanceOf(NotFoundException);
-  });
-});
-
-describe('CalendarSyncService (integration)', () => {
+describe('calendar integration', () => {
+  let ctx: TestContext;
+  let service: CalendarService;
   let sync: CalendarSyncService;
-  let events: { insert: any; patch: any; delete: any };
-  let googleCalendar: any;
+  let tools: CalendarTools;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    ctx = await createTestModule();
+    service = ctx.moduleRef.get(CalendarService);
     sync = ctx.moduleRef.get(CalendarSyncService);
+    tools = ctx.moduleRef.get(CalendarTools);
   });
-  beforeEach(() => {
-    events = {
-      insert: vi.fn(async (_params: any) => ({ data: { etag: 'e1' } })),
-      patch: vi.fn(async (_params: any) => ({ data: { etag: 'e2' } })),
-      delete: vi.fn(async (_params: any) => ({})),
+
+  afterAll(() => ctx.close());
+
+  beforeEach(() => resetState(ctx));
+
+  const dto = (data: Record<string, unknown> = {}) => ({
+    title: 'Standup',
+    startTime: at('2030-01-01T09:00:00Z'),
+    endTime: at('2030-01-01T10:00:00Z'),
+    ...data,
+  });
+  const row = (id: string) =>
+    ctx.prisma.localCalendar.findUniqueOrThrow({ where: { id }, include: { syncState: true } });
+  const rowOrNull = (id: string) => ctx.prisma.localCalendar.findUnique({ where: { id } });
+  const googleUser = () => seedGoogleUser(ctx.prisma, ctx.moduleRef.get(GoogleClientFactory));
+  /** event with a sync state; googleEventId set means it already exists on Google */
+  const seedSynced = (
+    event: Record<string, unknown> = {},
+    state: Record<string, unknown> = { syncStatus: 'DIRTY' },
+  ) => seedEvent(ctx.prisma, { ...event, syncState: { create: state } });
+
+  // ---------------------------------------------------------------- CalendarService
+
+  describe('createEvent', () => {
+    it('persists the event with a DIRTY sync state and no Google id', async () => {
+      const result = await service.createEvent(
+        dto({ description: 'd', location: 'Room', intent: 'WORK', priorityStatus: 'HIGH', attendees: ['a@x.com'] }) as any,
+      );
+
+      expect(result.syncState).toMatchObject({ syncStatus: 'DIRTY', googleEventId: null });
+      const saved = await row(result.id);
+      expect(saved).toMatchObject({
+        title: 'Standup',
+        description: 'd',
+        location: 'Room',
+        intent: 'WORK',
+        priorityStatus: 'HIGH',
+        attendees: ['a@x.com'],
+        deletedAt: null,
+        remindedAt: null,
+      });
+      expect(saved.startTime).toEqual(at('2030-01-01T09:00:00Z'));
+      expect(saved.syncState).toMatchObject({ syncStatus: 'DIRTY', googleEventId: null, lastSyncedAt: null });
+    });
+
+    it('rejects an end time before the start time with 400 and stores nothing', async () => {
+      await expect(
+        service.createEvent(dto({ endTime: at('2030-01-01T08:00:00Z') }) as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(await ctx.prisma.localCalendar.count()).toBe(0);
+    });
+
+    it('rejects an end time equal to the start time with 400', async () => {
+      await expect(
+        service.createEvent(dto({ endTime: at('2030-01-01T09:00:00Z') }) as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(await ctx.prisma.localCalendar.count()).toBe(0);
+    });
+  });
+
+  describe('getEvents', () => {
+    const seedRange = async () => {
+      const before = await seedEvent(ctx.prisma, {
+        title: 'before',
+        startTime: at('2030-01-01T08:00:00Z'),
+        endTime: at('2030-01-01T09:00:00Z'),
+      });
+      const inside = await seedEvent(ctx.prisma, {
+        title: 'inside',
+        startTime: at('2030-01-02T10:00:00Z'),
+        endTime: at('2030-01-02T11:00:00Z'),
+      });
+      const spanning = await seedEvent(ctx.prisma, {
+        title: 'spanning',
+        startTime: at('2030-01-01T12:00:00Z'),
+        endTime: at('2030-01-05T12:00:00Z'),
+      });
+      const after = await seedEvent(ctx.prisma, {
+        title: 'after',
+        startTime: at('2030-01-04T00:00:00Z'),
+        endTime: at('2030-01-04T01:00:00Z'),
+      });
+      return { before, inside, spanning, after };
     };
-    googleCalendar = vi.spyOn(google, 'calendar');
-    googleCalendar.mockClear();
-    googleCalendar.mockReturnValue({ events });
-  });
 
-  const connectGoogle = async () => {
-    const user = await seedUser(ctx.prisma);
-    await ctx.moduleRef.get(GoogleClientFactory).saveTokens(user.id, {
-      access_token: 'access',
-      refresh_token: 'refresh',
-      expiry_date: Date.now() + 3600 * 1000,
-    });
-  };
+    it('returns every event ordered by start time when no range is given', async () => {
+      await seedRange();
 
-  const seedPushed = async (googleEventId: string) => {
-    const created = await calendar.createEvent(event());
-    await ctx.prisma.calendarSyncState.update({
-      where: { localEventId: created.id },
-      data: { googleEventId },
-    });
-    return created;
-  };
+      const result = await service.getEvents({});
 
-  it('does nothing when no user is connected to Google', async () => {
-    await seedUser(ctx.prisma);
-    const created = await calendar.createEvent(event());
-
-    await expect(sync.syncLocalToGoogle()).resolves.toBeNull();
-
-    expect(googleCalendar).not.toHaveBeenCalled();
-    expect(await stateOf(created.id)).toMatchObject({ syncStatus: 'DIRTY' });
-  });
-
-  it('inserts a new event with the local ID without dashes and marks it SYNCED', async () => {
-    await connectGoogle();
-    const created = await calendar.createEvent(event());
-    const googleEventId = created.id.replace(/-/g, '');
-
-    await expect(sync.syncLocalToGoogle()).resolves.toMatchObject({ pushed: 1, failed: 0 });
-
-    expect(events.insert.mock.calls[0][0].requestBody).toMatchObject({
-      id: googleEventId,
-      summary: 'Meeting',
-      start: { dateTime: at(9).toISOString() },
-    });
-    const state = await stateOf(created.id);
-    expect(state).toMatchObject({ syncStatus: 'SYNCED', googleEventId, eTag: 'e1' });
-    expect(state?.lastSyncedAt).not.toBeNull();
-  });
-
-  it('patches a known event, and an event whose insert answers 409', async () => {
-    await connectGoogle();
-    const known = await seedPushed('g-known');
-
-    await sync.syncLocalToGoogle();
-
-    expect(events.insert).not.toHaveBeenCalled();
-    expect(events.patch.mock.calls[0][0]).toMatchObject({ eventId: 'g-known' });
-    expect(await stateOf(known.id)).toMatchObject({
-      syncStatus: 'SYNCED',
-      googleEventId: 'g-known',
-      eTag: 'e2',
+      expect(result.map((e) => e.title)).toEqual(['before', 'spanning', 'inside', 'after']);
     });
 
-    const retried = await calendar.createEvent(event());
-    events.insert.mockRejectedValueOnce(httpError(409));
+    it('returns events overlapping the range, including one that spans it', async () => {
+      await seedRange();
 
-    await expect(sync.syncLocalToGoogle()).resolves.toMatchObject({ pushed: 1, failed: 0 });
+      const result = await service.getEvents({
+        fromDate: at('2030-01-02T00:00:00Z'),
+        toDate: at('2030-01-03T00:00:00Z'),
+      });
 
-    expect(await stateOf(retried.id)).toMatchObject({
-      syncStatus: 'SYNCED',
-      googleEventId: retried.id.replace(/-/g, ''),
-      eTag: 'e2',
+      expect(result.map((e) => e.title)).toEqual(['spanning', 'inside']);
+    });
+
+    it('includes an event that ends exactly at fromDate or starts exactly at toDate', async () => {
+      await seedRange();
+
+      const result = await service.getEvents({
+        fromDate: at('2030-01-01T09:00:00Z'),
+        toDate: at('2030-01-01T09:00:00Z'),
+      });
+
+      expect(result.map((e) => e.title)).toEqual(['before']);
+    });
+
+    it('applies only fromDate when toDate is missing', async () => {
+      await seedRange();
+
+      const result = await service.getEvents({ fromDate: at('2030-01-04T00:30:00Z') });
+
+      expect(result.map((e) => e.title)).toEqual(['spanning', 'after']);
+    });
+
+    it('applies only toDate when fromDate is missing', async () => {
+      await seedRange();
+
+      const result = await service.getEvents({ toDate: at('2030-01-01T10:00:00Z') });
+
+      expect(result.map((e) => e.title)).toEqual(['before']);
+    });
+
+    it('hides soft-deleted events', async () => {
+      await seedEvent(ctx.prisma, { title: 'gone', deletedAt: new Date() });
+      await seedEvent(ctx.prisma, { title: 'kept' });
+
+      const result = await service.getEvents({});
+
+      expect(result.map((e) => e.title)).toEqual(['kept']);
+    });
+
+    it('returns an empty list when nothing matches', async () => {
+      expect(await service.getEvents({})).toEqual([]);
     });
   });
 
-  it('removes a soft-deleted event on Google then locally, also when Google answers 404', async () => {
-    await connectGoogle();
-    const first = await seedPushed('g-first');
-    const second = await seedPushed('g-second');
-    await calendar.deleteEvent(first.id);
-    await calendar.deleteEvent(second.id);
-    events.delete.mockRejectedValueOnce(httpError(404));
+  describe('getEventById', () => {
+    it('returns the event with its sync state', async () => {
+      const event = await seedSynced({ title: 'Find me' });
 
-    await expect(sync.syncLocalToGoogle()).resolves.toMatchObject({ deleted: 2, failed: 0 });
+      const result = await service.getEventById(event.id);
 
-    expect(events.delete.mock.calls.map((call: any[]) => call[0].eventId).sort()).toEqual([
-      'g-first',
-      'g-second',
-    ]);
-    expect(await ctx.prisma.localCalendar.count()).toBe(0);
-    expect(await ctx.prisma.calendarSyncState.count()).toBe(0);
-  });
-
-  it('stops syncing an event that was removed on Google', async () => {
-    await connectGoogle();
-    const created = await seedPushed('g-gone');
-    events.patch.mockRejectedValueOnce(httpError(404));
-
-    await expect(sync.syncLocalToGoogle()).resolves.toMatchObject({ removedRemotely: 1, pushed: 0 });
-
-    expect(await stateOf(created.id)).toMatchObject({ syncStatus: 'SYNCED', googleEventId: null });
-    expect(await ctx.prisma.localCalendar.count()).toBe(1);
-  });
-
-  it('keeps an event DIRTY when it is edited while the Google call is pending', async () => {
-    await connectGoogle();
-    const created = await calendar.createEvent(event());
-    events.insert.mockImplementationOnce(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await calendar.updateEvent(created.id, { title: 'Edited during sync' });
-      return { data: { etag: 'e1' } };
+      expect(result).toMatchObject({ id: event.id, title: 'Find me', syncState: { syncStatus: 'DIRTY' } });
     });
 
-    await sync.syncLocalToGoogle();
+    it('throws 404 for an unknown id', async () => {
+      await expect(service.getEventById(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+    });
 
-    expect(await stateOf(created.id)).toMatchObject({
-      syncStatus: 'DIRTY',
-      googleEventId: created.id.replace(/-/g, ''),
-      lastSyncedAt: null,
+    it('throws 404 for a soft-deleted event', async () => {
+      const event = await seedEvent(ctx.prisma, { deletedAt: new Date() });
+
+      await expect(service.getEventById(event.id)).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
-  it('one failing event does not stop the next one', async () => {
-    await connectGoogle();
-    await calendar.createEvent(event());
-    await calendar.createEvent(event());
-    events.insert.mockRejectedValueOnce(httpError(500));
+  describe('updateEvent', () => {
+    it('updates the fields and marks a SYNCED state DIRTY while keeping the Google id', async () => {
+      const event = await seedSynced(
+        { title: 'Old' },
+        { syncStatus: 'SYNCED', googleEventId: 'g-1', lastSyncedAt: at('2030-01-01T00:00:00Z') },
+      );
 
-    await expect(sync.syncLocalToGoogle()).resolves.toMatchObject({ pushed: 1, failed: 1 });
+      const result = await service.updateEvent(event.id, { title: 'New', location: 'Hall' });
 
-    const states = await ctx.prisma.calendarSyncState.findMany();
-    expect(states.map((s) => s.syncStatus).sort()).toEqual(['DIRTY', 'SYNCED']);
-    expect(states.find((s) => s.syncStatus === 'DIRTY')?.googleEventId).toBeNull();
+      expect(result).toMatchObject({ title: 'New', location: 'Hall' });
+      const saved = await row(event.id);
+      expect(saved).toMatchObject({ title: 'New', location: 'Hall' });
+      expect(saved.syncState).toMatchObject({ syncStatus: 'DIRTY', googleEventId: 'g-1' });
+    });
+
+    it('bumps updatedAt', async () => {
+      const event = await seedSynced();
+
+      await service.updateEvent(event.id, { title: 'Changed' });
+
+      expect((await row(event.id)).updatedAt.getTime()).toBeGreaterThan(event.updatedAt.getTime());
+    });
+
+    it('creates a DIRTY sync state when the event has none', async () => {
+      const event = await seedEvent(ctx.prisma);
+
+      await service.updateEvent(event.id, { title: 'With state' });
+
+      expect((await row(event.id)).syncState).toMatchObject({ syncStatus: 'DIRTY', googleEventId: null });
+    });
+
+    it('resets remindedAt when the start time changes', async () => {
+      const event = await seedEvent(ctx.prisma, { remindedAt: new Date() });
+
+      await service.updateEvent(event.id, {
+        startTime: at('2030-01-01T09:30:00Z'),
+      });
+
+      expect((await row(event.id)).remindedAt).toBeNull();
+    });
+
+    it('keeps remindedAt when the start time is not changed', async () => {
+      const remindedAt = at('2030-01-01T08:00:00Z');
+      const event = await seedEvent(ctx.prisma, { remindedAt });
+
+      await service.updateEvent(event.id, { title: 'Renamed' });
+
+      expect((await row(event.id)).remindedAt).toEqual(remindedAt);
+    });
+
+    it('rejects a new end time before the stored start time with 400 and leaves the row alone', async () => {
+      const event = await seedSynced({ title: 'Stable' }, { syncStatus: 'SYNCED', googleEventId: 'g-1' });
+
+      await expect(
+        service.updateEvent(event.id, { endTime: at('2030-01-01T08:00:00Z') }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      const saved = await row(event.id);
+      expect(saved.endTime).toEqual(event.endTime);
+      expect(saved.syncState?.syncStatus).toBe('SYNCED');
+    });
+
+    it('rejects a new start time after the stored end time with 400', async () => {
+      const event = await seedEvent(ctx.prisma);
+
+      await expect(
+        service.updateEvent(event.id, { startTime: at('2030-01-01T11:00:00Z') }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('throws 404 for an unknown id', async () => {
+      await expect(service.updateEvent(MISSING, { title: 'x' })).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws 404 for a soft-deleted event', async () => {
+      const event = await seedEvent(ctx.prisma, { deletedAt: new Date() });
+
+      await expect(service.updateEvent(event.id, { title: 'x' })).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('deleteEvent', () => {
+    it('hard-deletes a never-synced event together with its sync state', async () => {
+      const event = await seedSynced();
+
+      const result = await service.deleteEvent(event.id);
+
+      expect(result).toEqual({ success: true });
+      expect(await rowOrNull(event.id)).toBeNull();
+      expect(await ctx.prisma.calendarSyncState.count()).toBe(0);
+    });
+
+    it('hard-deletes an event that has no sync state', async () => {
+      const event = await seedEvent(ctx.prisma);
+
+      await service.deleteEvent(event.id);
+
+      expect(await rowOrNull(event.id)).toBeNull();
+    });
+
+    it('soft-deletes an event already on Google, marks it DIRTY and hides it at once', async () => {
+      const event = await seedSynced({}, { syncStatus: 'SYNCED', googleEventId: 'g-1' });
+
+      const result = await service.deleteEvent(event.id);
+
+      expect(result).toEqual({ success: true });
+      const saved = await row(event.id);
+      expect(saved.deletedAt).toBeInstanceOf(Date);
+      expect(saved.syncState).toMatchObject({ syncStatus: 'DIRTY', googleEventId: 'g-1' });
+      expect(await service.getEvents({})).toEqual([]);
+      await expect(service.getEventById(event.id)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws 404 for an unknown id', async () => {
+      await expect(service.deleteEvent(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws 404 when the event is already soft-deleted', async () => {
+      const event = await seedSynced({ deletedAt: new Date() }, { syncStatus: 'DIRTY', googleEventId: 'g-1' });
+
+      await expect(service.deleteEvent(event.id)).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  // ---------------------------------------------------------------- CalendarSyncService
+
+  describe('syncLocalToGoogle', () => {
+    it('returns null and calls Google never when no user is connected to Google', async () => {
+      await seedSynced();
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toBeNull();
+      expect(ctx.google.calendar.events.insert).not.toHaveBeenCalled();
+      expect((await ctx.prisma.calendarSyncState.findFirstOrThrow()).syncStatus).toBe('DIRTY');
+    });
+
+    it('returns zero counts when there is nothing to sync', async () => {
+      await googleUser();
+
+      expect(await sync.syncLocalToGoogle()).toEqual({ pushed: 0, deleted: 0, removedRemotely: 0, failed: 0 });
+    });
+
+    it('inserts a new DIRTY event with a client-generated id, then stores id, etag and SYNCED', async () => {
+      await googleUser();
+      const event = await seedSynced({
+        title: 'Lunch',
+        description: 'with Ann',
+        location: 'Cafe',
+        startTime: at('2030-02-01T12:00:00Z'),
+        endTime: at('2030-02-01T13:30:00Z'),
+      });
+      ctx.google.calendar.events.insert.mockResolvedValue({ data: { etag: '"etag-1"' } });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 1, deleted: 0, removedRemotely: 0, failed: 0 });
+      const googleId = event.id.replace(/-/g, '');
+      expect(ctx.google.calendar.events.insert).toHaveBeenCalledTimes(1);
+      expect(ctx.google.calendar.events.insert).toHaveBeenCalledWith({
+        calendarId: 'primary',
+        requestBody: {
+          id: googleId,
+          summary: 'Lunch',
+          description: 'with Ann',
+          location: 'Cafe',
+          start: { dateTime: '2030-02-01T12:00:00.000Z' },
+          end: { dateTime: '2030-02-01T13:30:00.000Z' },
+        },
+      });
+      expect(ctx.google.calendar.events.patch).not.toHaveBeenCalled();
+      const state = (await row(event.id)).syncState;
+      expect(state).toMatchObject({ googleEventId: googleId, syncStatus: 'SYNCED', eTag: '"etag-1"' });
+      expect(state?.lastSyncedAt).toBeInstanceOf(Date);
+    });
+
+    it('sends null description and location for an event that has none', async () => {
+      await googleUser();
+      await seedSynced();
+      ctx.google.calendar.events.insert.mockResolvedValue({ data: { etag: 'e' } });
+
+      await sync.syncLocalToGoogle();
+
+      const body = ctx.google.calendar.events.insert.mock.calls[0][0].requestBody;
+      expect(body).toMatchObject({ summary: 'Meeting', description: null, location: null });
+    });
+
+    it('treats a 409 on insert as already created and patches instead', async () => {
+      await googleUser();
+      const event = await seedSynced();
+      ctx.google.calendar.events.insert.mockRejectedValue(googleError(409));
+      ctx.google.calendar.events.patch.mockResolvedValue({ data: { etag: '"etag-2"' } });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 1, deleted: 0, removedRemotely: 0, failed: 0 });
+      const googleId = event.id.replace(/-/g, '');
+      expect(ctx.google.calendar.events.patch).toHaveBeenCalledWith(
+        expect.objectContaining({ calendarId: 'primary', eventId: googleId }),
+      );
+      expect((await row(event.id)).syncState).toMatchObject({
+        googleEventId: googleId,
+        syncStatus: 'SYNCED',
+        eTag: '"etag-2"',
+      });
+    });
+
+    it('patches a DIRTY event that already has a Google id, without a body id', async () => {
+      await googleUser();
+      const event = await seedSynced(
+        { title: 'Renamed', startTime: at('2030-03-01T08:00:00Z'), endTime: at('2030-03-01T09:00:00Z') },
+        { syncStatus: 'DIRTY', googleEventId: 'g-9', eTag: 'old' },
+      );
+      ctx.google.calendar.events.patch.mockResolvedValue({ data: { etag: 'new' } });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 1, deleted: 0, removedRemotely: 0, failed: 0 });
+      expect(ctx.google.calendar.events.insert).not.toHaveBeenCalled();
+      expect(ctx.google.calendar.events.patch).toHaveBeenCalledWith({
+        calendarId: 'primary',
+        eventId: 'g-9',
+        requestBody: {
+          summary: 'Renamed',
+          description: null,
+          location: null,
+          start: { dateTime: '2030-03-01T08:00:00.000Z' },
+          end: { dateTime: '2030-03-01T09:00:00.000Z' },
+        },
+      });
+      expect((await row(event.id)).syncState).toMatchObject({
+        googleEventId: 'g-9',
+        syncStatus: 'SYNCED',
+        eTag: 'new',
+      });
+    });
+
+    it('skips events whose state is already SYNCED', async () => {
+      await googleUser();
+      await seedSynced({}, { syncStatus: 'SYNCED', googleEventId: 'g-1' });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 0, deleted: 0, removedRemotely: 0, failed: 0 });
+      expect(ctx.google.calendar.events.patch).not.toHaveBeenCalled();
+    });
+
+    it('deletes a soft-deleted event on Google and then removes the row', async () => {
+      await googleUser();
+      const event = await seedSynced({ deletedAt: new Date() }, { syncStatus: 'DIRTY', googleEventId: 'g-5' });
+      ctx.google.calendar.events.delete.mockResolvedValue({});
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 0, deleted: 1, removedRemotely: 0, failed: 0 });
+      expect(ctx.google.calendar.events.delete).toHaveBeenCalledWith({ calendarId: 'primary', eventId: 'g-5' });
+      expect(await rowOrNull(event.id)).toBeNull();
+      expect(await ctx.prisma.calendarSyncState.count()).toBe(0);
+    });
+
+    it.each([404, 410])('removes the row when Google answers %i on delete', async (status) => {
+      await googleUser();
+      const event = await seedSynced({ deletedAt: new Date() }, { syncStatus: 'DIRTY', googleEventId: 'g-5' });
+      ctx.google.calendar.events.delete.mockRejectedValue(googleError(status));
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 0, deleted: 1, removedRemotely: 0, failed: 0 });
+      expect(await rowOrNull(event.id)).toBeNull();
+    });
+
+    it('keeps the soft-deleted row and counts a failure when delete fails with 500', async () => {
+      await googleUser();
+      const event = await seedSynced({ deletedAt: new Date() }, { syncStatus: 'DIRTY', googleEventId: 'g-5' });
+      ctx.google.calendar.events.delete.mockRejectedValue(googleError(500));
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 0, deleted: 0, removedRemotely: 0, failed: 1 });
+      expect(await rowOrNull(event.id)).not.toBeNull();
+      expect((await row(event.id)).syncState?.syncStatus).toBe('DIRTY');
+    });
+
+    it('removes a soft-deleted event that never reached Google without calling Google', async () => {
+      await googleUser();
+      const event = await seedSynced({ deletedAt: new Date() });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 0, deleted: 1, removedRemotely: 0, failed: 0 });
+      expect(ctx.google.calendar.events.delete).not.toHaveBeenCalled();
+      expect(await rowOrNull(event.id)).toBeNull();
+    });
+
+    it.each([404, 410])(
+      'detaches the event and stops syncing it when patch answers %i (removed on Google)',
+      async (status) => {
+        await googleUser();
+        const event = await seedSynced({}, { syncStatus: 'DIRTY', googleEventId: 'g-7', eTag: 'x' });
+        ctx.google.calendar.events.patch.mockRejectedValue(googleError(status));
+
+        const result = await sync.syncLocalToGoogle();
+
+        expect(result).toEqual({ pushed: 0, deleted: 0, removedRemotely: 1, failed: 0 });
+        const saved = await row(event.id);
+        expect(saved.deletedAt).toBeNull();
+        expect(saved.syncState).toMatchObject({ googleEventId: null, syncStatus: 'SYNCED' });
+      },
+    );
+
+    it('reads the status from error.response.status and error.code too', async () => {
+      await googleUser();
+      await seedSynced({}, { syncStatus: 'DIRTY', googleEventId: 'g-1' });
+      await seedSynced({ title: 'Second' }, { syncStatus: 'DIRTY', googleEventId: 'g-2' });
+      ctx.google.calendar.events.patch
+        .mockRejectedValueOnce(Object.assign(new Error('x'), { response: { status: 404 } }))
+        .mockRejectedValueOnce(Object.assign(new Error('x'), { code: 410 }));
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 0, deleted: 0, removedRemotely: 2, failed: 0 });
+    });
+
+    it('counts one failing event and still syncs the others', async () => {
+      await googleUser();
+      const bad = await seedSynced({ title: 'bad' }, { syncStatus: 'DIRTY', googleEventId: 'g-bad' });
+      const good = await seedSynced({ title: 'good' }, { syncStatus: 'DIRTY', googleEventId: 'g-good' });
+      ctx.google.calendar.events.patch.mockImplementation(async ({ eventId }: { eventId: string }) => {
+        if (eventId === 'g-bad') throw googleError(500);
+        return { data: { etag: 'ok' } };
+      });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 1, deleted: 0, removedRemotely: 0, failed: 1 });
+      expect((await row(bad.id)).syncState?.syncStatus).toBe('DIRTY');
+      expect((await row(good.id)).syncState).toMatchObject({ syncStatus: 'SYNCED', eTag: 'ok' });
+    });
+
+    it('retries a failed event on the next run', async () => {
+      await googleUser();
+      const event = await seedSynced({}, { syncStatus: 'DIRTY', googleEventId: 'g-1' });
+      ctx.google.calendar.events.patch
+        .mockRejectedValueOnce(googleError(503))
+        .mockResolvedValueOnce({ data: { etag: 'e2' } });
+
+      expect(await sync.syncLocalToGoogle()).toMatchObject({ pushed: 0, failed: 1 });
+      expect(await sync.syncLocalToGoogle()).toMatchObject({ pushed: 1, failed: 0 });
+      expect((await row(event.id)).syncState).toMatchObject({ syncStatus: 'SYNCED', eTag: 'e2' });
+    });
+
+    it('keeps the event DIRTY when it was edited during the Google call, but stores the Google id', async () => {
+      await googleUser();
+      const event = await seedSynced();
+      ctx.google.calendar.events.insert.mockImplementation(async () => {
+        // the user edits the event while the push is in flight
+        await service.updateEvent(event.id, { title: 'Edited meanwhile' });
+        return { data: { etag: 'e1' } };
+      });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 1, deleted: 0, removedRemotely: 0, failed: 0 });
+      const saved = await row(event.id);
+      expect(saved.title).toBe('Edited meanwhile');
+      expect(saved.syncState?.syncStatus).toBe('DIRTY');
+      expect(saved.syncState?.googleEventId).toBe(event.id.replace(/-/g, ''));
+    });
+
+    it('patches (not inserts) on the run after an edit during sync', async () => {
+      await googleUser();
+      const event = await seedSynced();
+      ctx.google.calendar.events.insert.mockImplementationOnce(async () => {
+        await service.updateEvent(event.id, { title: 'Edited meanwhile' });
+        return { data: { etag: 'e1' } };
+      });
+      ctx.google.calendar.events.patch.mockResolvedValue({ data: { etag: 'e2' } });
+
+      await sync.syncLocalToGoogle();
+      await sync.syncLocalToGoogle();
+
+      expect(ctx.google.calendar.events.insert).toHaveBeenCalledTimes(1);
+      expect(ctx.google.calendar.events.patch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestBody: expect.objectContaining({ summary: 'Edited meanwhile' }),
+        }),
+      );
+      expect((await row(event.id)).syncState).toMatchObject({ syncStatus: 'SYNCED', eTag: 'e2' });
+    });
+
+    it('returns null for a second call while a run is in progress, then runs again after it ends', async () => {
+      await googleUser();
+      await seedSynced();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let entered!: () => void;
+      const insertStarted = new Promise<void>((resolve) => (entered = resolve));
+      ctx.google.calendar.events.insert.mockImplementation(async () => {
+        entered();
+        await gate;
+        return { data: { etag: 'e' } };
+      });
+
+      const first = sync.syncLocalToGoogle();
+      await insertStarted;
+      const second = await sync.syncLocalToGoogle();
+      release();
+      const firstResult = await first;
+
+      expect(second).toBeNull();
+      expect(firstResult).toEqual({ pushed: 1, deleted: 0, removedRemotely: 0, failed: 0 });
+      expect(ctx.google.calendar.events.insert).toHaveBeenCalledTimes(1);
+      expect(await sync.syncLocalToGoogle()).toEqual({ pushed: 0, deleted: 0, removedRemotely: 0, failed: 0 });
+    });
+
+    it('releases the run guard when the run throws', async () => {
+      await googleUser();
+      const spy = vi.spyOn(ctx.prisma.calendarSyncState, 'findMany').mockRejectedValueOnce(new Error('db down'));
+
+      try {
+        await expect(sync.syncLocalToGoogle()).rejects.toThrow('db down');
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(await sync.syncLocalToGoogle()).toEqual({ pushed: 0, deleted: 0, removedRemotely: 0, failed: 0 });
+    });
+
+    it('sums pushed, deleted, removedRemotely and failed in one run', async () => {
+      await googleUser();
+      await seedSynced({ title: 'new' });
+      await seedSynced({ title: 'patch' }, { syncStatus: 'DIRTY', googleEventId: 'g-patch' });
+      await seedSynced({ title: 'gone-remote' }, { syncStatus: 'DIRTY', googleEventId: 'g-gone' });
+      await seedSynced({ title: 'deleted', deletedAt: new Date() }, { syncStatus: 'DIRTY', googleEventId: 'g-del' });
+      await seedSynced({ title: 'fails' }, { syncStatus: 'DIRTY', googleEventId: 'g-fail' });
+      ctx.google.calendar.events.insert.mockResolvedValue({ data: { etag: 'e' } });
+      ctx.google.calendar.events.delete.mockResolvedValue({});
+      ctx.google.calendar.events.patch.mockImplementation(async ({ eventId }: { eventId: string }) => {
+        if (eventId === 'g-gone') throw googleError(404);
+        if (eventId === 'g-fail') throw googleError(500);
+        return { data: { etag: 'e' } };
+      });
+
+      const result = await sync.syncLocalToGoogle();
+
+      expect(result).toEqual({ pushed: 2, deleted: 1, removedRemotely: 1, failed: 1 });
+    });
+  });
+
+  describe('handleCalendarCronSync', () => {
+    it('pushes dirty events when called directly', async () => {
+      await googleUser();
+      const event = await seedSynced();
+      ctx.google.calendar.events.insert.mockResolvedValue({ data: { etag: 'e' } });
+
+      await sync.handleCalendarCronSync();
+
+      expect((await row(event.id)).syncState?.syncStatus).toBe('SYNCED');
+    });
+
+    it('does nothing and does not throw when no user is connected to Google', async () => {
+      await seedSynced();
+
+      await expect(sync.handleCalendarCronSync()).resolves.toBeUndefined();
+
+      expect(ctx.google.calendar.events.insert).not.toHaveBeenCalled();
+    });
+
+    it('swallows an unexpected error from the sync run', async () => {
+      const spy = vi.spyOn(sync, 'syncLocalToGoogle').mockRejectedValueOnce(new Error('boom'));
+
+      try {
+        await expect(sync.handleCalendarCronSync()).resolves.toBeUndefined();
+        expect(spy).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------- CalendarTools
+
+  describe('CalendarTools', () => {
+    it('createCalendarEvent creates the event with a DIRTY sync state', async () => {
+      const result = await tools.createCalendarEvent(dto({ title: 'From AI' }) as any);
+
+      const saved = await row(result.id);
+      expect(saved.title).toBe('From AI');
+      expect(saved.syncState?.syncStatus).toBe('DIRTY');
+    });
+
+    it('createCalendarEvent surfaces the 400 for an invalid range', async () => {
+      await expect(
+        tools.createCalendarEvent(dto({ endTime: at('2030-01-01T08:00:00Z') }) as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('getCalendarEvents returns events in the requested range', async () => {
+      await seedEvent(ctx.prisma, { title: 'in', startTime: at('2030-05-01T10:00:00Z'), endTime: at('2030-05-01T11:00:00Z') });
+      await seedEvent(ctx.prisma, { title: 'out', startTime: at('2030-06-01T10:00:00Z'), endTime: at('2030-06-01T11:00:00Z') });
+
+      const result = await tools.getCalendarEvents({
+        fromDate: at('2030-05-01T00:00:00Z'),
+        toDate: at('2030-05-02T00:00:00Z'),
+      });
+
+      expect(result.map((e) => e.title)).toEqual(['in']);
+    });
+
+    it('updateCalendarEvent splits the id from the changes and marks the event DIRTY', async () => {
+      const event = await seedSynced({ title: 'Old' }, { syncStatus: 'SYNCED', googleEventId: 'g-1' });
+
+      await tools.updateCalendarEvent({ id: event.id, title: 'Updated by AI' });
+
+      const saved = await row(event.id);
+      expect(saved.title).toBe('Updated by AI');
+      expect(saved.syncState?.syncStatus).toBe('DIRTY');
+    });
+
+    it('updateCalendarEvent surfaces 404 for an unknown id', async () => {
+      await expect(tools.updateCalendarEvent({ id: MISSING, title: 'x' })).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('deleteCalendarEvent hard-deletes a never-synced event', async () => {
+      const event = await seedSynced();
+
+      const result = await tools.deleteCalendarEvent({ id: event.id });
+
+      expect(result).toEqual({ success: true });
+      expect(await rowOrNull(event.id)).toBeNull();
+    });
+
+    it('deleteCalendarEvent soft-deletes a synced event', async () => {
+      const event = await seedSynced({}, { syncStatus: 'SYNCED', googleEventId: 'g-1' });
+
+      await tools.deleteCalendarEvent({ id: event.id });
+
+      expect((await row(event.id)).deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('deleteCalendarEvent surfaces 404 for an unknown id', async () => {
+      await expect(tools.deleteCalendarEvent({ id: MISSING })).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 });

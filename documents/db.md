@@ -1,18 +1,7 @@
 # Secretary — Database
 
-Taken from `server/prisma/schema.prisma` and the migrations in `server/prisma/migrations` (last checked 2026-10-16).
+Taken from `server/prisma/schema.prisma` and the migrations in `server/prisma/migrations` (last checked 2026-10-17).
 Postgres with the `pgvector` extension. Every table name below is the `@@map` name in the schema.
-
-Status tags: `[Implemented]` = in the schema and migrations today. `[Planned]` = designed, not in the schema yet.
-
-## Change log
-
-| Date | Change |
-|------|--------|
-| 2026-10-13 | Rewritten from the schema. Removed `memory_decay_logs` (dropped) and `email_logs` "deduplication hash" (dropped; dedup is on `message_id` only). Corrected: refresh tokens are SHA-256 hashes, not encrypted; the embedding is 1536 dimensions only; `rag_chunks`, `queue_jobs` and `user_sessions.device_id` are kept but unused. Added `users.gmail_history_id`, `email_logs.ai_summary`, `local_calendars.deleted_at` / `reminded_at`, the indexes and the `onDelete` rules. |
-| 2026-10-13 | Added section 5 "Chat": tables `chat_sessions` and `chat_messages`, enum `ChatRole`, column `characters.memory_rule`. Chat is stored in full in relational tables and never in the vector store; `chat_messages.memory_id` is the only link from a chat message to `ai_memories`. |
-| 2026-10-16 | Chat tables and `characters.memory_rule` verified in `schema.prisma` and migration `20261013130000_chat_sessions_messages`: `[Planned]` tags changed to `[Implemented]`. Dead references to deleted planning files and decision IDs removed. |
-| 2026-10-16 | Review fix: `ai_memories.source` values; `POST /ai-agent/memories` accepts any string. |
 
 ## Tables
 
@@ -25,7 +14,7 @@ listed. Stored times are UTC.
 
 ---
 
-## 1. Auth, character and persona `[Implemented]`
+## 1. Auth, character and persona
 
 ### `users`
 
@@ -72,7 +61,6 @@ This is the **login** session. It is unrelated to a chat session (section 5).
 | `name` | text | |
 | `voice_id` | text, null | Fish.audio voice. |
 | `source` | text, null | Origin of the character. |
-| `is_active` | boolean, default false | Exactly one active character: partial unique index `characters_single_active` (`WHERE is_active`), hand-written in a migration and unknown to `schema.prisma`. |
 | `memory_rule` | text, null | The rule that tells the AI which chat messages are important enough to become a memory (max 2000 characters, set through `memoryRule` on create / update). Null = built-in default rule in `AgentService`. |
 | `created_at`, `updated_at` | timestamp | |
 
@@ -87,7 +75,7 @@ This is the **login** session. It is unrelated to a chat session (section 5).
 
 ---
 
-## 2. Email and queue `[Implemented]`
+## 2. Email and queue
 
 ### `email_logs`
 
@@ -119,7 +107,7 @@ it: BullMQ keeps job state in Redis.
 
 ---
 
-## 3. Finance and calendar `[Implemented]`
+## 3. Finance and calendar
 
 ### `bank_accounts`
 
@@ -159,7 +147,7 @@ for the current `start_time` was delivered), timestamps. Index on `start_time`.
 
 ---
 
-## 4. AI memory (pgvector) `[Implemented]`
+## 4. AI memory (pgvector)
 
 ### `ai_memories`
 
@@ -170,8 +158,8 @@ The only table with an embedding. It holds long-term memories, **not** chat tran
 | `content` | text | |
 | `embedding` | `vector(1536)`, null | HNSW index `ai_memories_embedding_hnsw` (`vector_cosine_ops`), hand-written in a migration. |
 | `content_tsv` | `tsvector`, null | GIN index `ai_memories_content_tsv_gin`, hand-written. Text search configuration `simple`. |
-| `category` | text, null | |
-| `source` | text, null | `CHAT` (set by `save_user_memory`), `MANUAL` (default of `POST /ai-agent/memories`, which accepts any string). No server code writes `EMAIL`. |
+| `category` | text, null | Default `GENERAL` when the service saves a memory without one. |
+| `source` | text, null | `CHAT` (set by `save_user_memory`), `MANUAL` (default of `POST /ai-agent/memories`, which accepts any string). No code that runs writes `EMAIL`: the unused `RagChunkService` would write `EMAIL` and `TRANSACTION`. |
 | `initial_score` | float, default 1.0 | S0. |
 | `decay_factor` | float, default 0.01 | λ. Decay `S0 · e^(−λt)` is computed at query time; there is no decay job and no decay log. |
 | `last_accessed_at` | timestamp | Refreshed when a search returns the memory. |
@@ -187,7 +175,7 @@ service and nothing reads the table.
 
 ---
 
-## 5. Chat `[Implemented]`
+## 5. Chat
 
 The server stores every chat session and message; the client sends no history.
 
@@ -198,6 +186,8 @@ Rules:
 2. `chat_messages.content` holds the **full** message, both what the user sent and what the model answered.
 3. Only a message the AI marks important, by the rule configured on the character (`characters.memory_rule`),
    produces a row in `ai_memories`. `chat_messages.memory_id` points to it.
+4. The history of a turn is read from `chat_messages`: up to the last 20 earlier messages of the session. Rows with
+   empty text are dropped, and the history starts at a user turn.
 
 ### `chat_sessions` — model `ChatSession`
 
@@ -234,11 +224,10 @@ Migration: `20261013130000_chat_sessions_messages`.
 
 ## Indexes that exist only in migrations
 
-`schema.prisma` does not know these three. A generated migration will try to drop them: delete those `DROP INDEX`
+`schema.prisma` does not know these two. A generated migration will try to drop them: delete those `DROP INDEX`
 statements before applying.
 
 | Index | Table | Definition |
 |-------|-------|------------|
-| `characters_single_active` | `characters` | Partial unique, `WHERE is_active`. |
 | `ai_memories_embedding_hnsw` | `ai_memories` | HNSW, `vector_cosine_ops`. |
 | `ai_memories_content_tsv_gin` | `ai_memories` | GIN on `content_tsv`. |
