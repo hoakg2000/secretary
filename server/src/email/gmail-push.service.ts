@@ -10,7 +10,8 @@ import { CronExpression, SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 import { gmail_v1, google } from 'googleapis';
 import { GoogleClientFactory } from '../auth/google-client.factory';
-import { isGone } from '../calendar/calendar-sync.service';
+import { isGone } from '../common/google/google-errors';
+import { runExclusive } from '../common/run-exclusive';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 
@@ -57,7 +58,7 @@ export function extractBody(payload?: gmail_v1.Schema$MessagePart) {
 export class GmailPushService implements OnApplicationBootstrap {
   private readonly logger = new Logger(GmailPushService.name);
   private readonly verifier = new google.auth.OAuth2();
-  private running = false;
+  private readonly lock = { running: false };
 
   constructor(
     private readonly prisma: PrismaService,
@@ -77,27 +78,16 @@ export class GmailPushService implements OnApplicationBootstrap {
     void this.renewWatch();
   }
 
-  private async getConnectedUser() {
-    return this.prisma.user.findFirst({
-      where: { googleAccessToken: { not: null } },
-      select: { id: true, gmailHistoryId: true },
-    });
-  }
-
-  private async getGmailClient(userId: string) {
-    const auth = await this.googleClientFactory.forUser(userId);
-    return auth ? google.gmail({ version: 'v1', auth }) : null;
-  }
-
   /** Đăng ký / gia hạn Gmail watch. Bỏ qua khi chưa cấu hình topic hoặc chưa kết nối Google. */
   async renewWatch() {
     try {
       const topicName = this.configService.get<string>('GMAIL_PUBSUB_TOPIC');
       if (!topicName) return;
 
-      const user = await this.getConnectedUser();
-      const gmail = user && (await this.getGmailClient(user.id));
-      if (!user || !gmail) return;
+      const connected = await this.googleClientFactory.forConnectedUser();
+      if (!connected) return;
+      const { user, auth } = connected;
+      const gmail = google.gmail({ version: 'v1', auth });
 
       const res = await gmail.users.watch({
         userId: 'me',
@@ -155,41 +145,42 @@ export class GmailPushService implements OnApplicationBootstrap {
    * gửi lại an toàn vì EmailService.ingest bỏ qua email trùng Message-ID.
    */
   async runPass(): Promise<number> {
-    if (this.running) {
-      throw new ServiceUnavailableException('Lượt nạp Gmail trước chưa xong');
-    }
-    this.running = true;
+    return runExclusive(
+      this.lock,
+      async () => {
+        const connected = await this.googleClientFactory.forConnectedUser();
+        if (!connected) {
+          // Ack: không có gì để thử lại cho tới khi kết nối Google (lượt đầu sau đó liệt kê lại 1 ngày gần nhất)
+          this.logger.warn('Chưa kết nối tài khoản Google. Bỏ qua thông báo.');
+          return 0;
+        }
 
-    try {
-      const user = await this.getConnectedUser();
-      const gmail = user && (await this.getGmailClient(user.id));
-      if (!user || !gmail) {
-        // Ack: không có gì để thử lại cho tới khi kết nối Google (lượt đầu sau đó liệt kê lại 1 ngày gần nhất)
-        this.logger.warn('Chưa kết nối tài khoản Google. Bỏ qua thông báo.');
-        return 0;
-      }
+        const { user, auth } = connected;
+        const gmail = google.gmail({ version: 'v1', auth });
 
-      // Dùng history ID đã lưu, không dùng ID trong thông báo: thông báo có thể tới sai thứ tự
-      const { messageIds, historyId } =
-        (user.gmailHistoryId &&
-          (await this.listHistory(gmail, user.gmailHistoryId))) ||
-        (await this.listRecent(gmail));
+        // Dùng history ID đã lưu, không dùng ID trong thông báo: thông báo có thể tới sai thứ tự
+        const { messageIds, historyId } =
+          (user.gmailHistoryId &&
+            (await this.listHistory(gmail, user.gmailHistoryId))) ||
+          (await this.listRecent(gmail));
 
-      for (const id of messageIds) {
-        await this.ingestMessage(gmail, id);
-      }
+        for (const id of messageIds) {
+          await this.ingestMessage(gmail, id);
+        }
 
-      // Chỉ lưu sau khi cả lượt thành công
-      if (historyId) {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { gmailHistoryId: historyId },
-        });
-      }
-      return messageIds.length;
-    } finally {
-      this.running = false;
-    }
+        // Chỉ lưu sau khi cả lượt thành công
+        if (historyId) {
+          await this.prisma.user.update({
+            where: { id: user.id },
+            data: { gmailHistoryId: historyId },
+          });
+        }
+        return messageIds.length;
+      },
+      () => {
+        throw new ServiceUnavailableException('Lượt nạp Gmail trước chưa xong');
+      },
+    );
   }
 
   /** Email mới kể từ startHistoryId; null khi Google trả 404 (history ID quá cũ) */

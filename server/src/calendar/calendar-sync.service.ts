@@ -5,6 +5,8 @@ import { CalendarSyncState, LocalCalendar } from '@prisma/client';
 import { CronJob } from 'cron';
 import { calendar_v3, google } from 'googleapis';
 import { GoogleClientFactory } from '../auth/google-client.factory';
+import { isGone, statusOf } from '../common/google/google-errors';
+import { runExclusive } from '../common/run-exclusive';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface CalendarSyncResult {
@@ -19,19 +21,13 @@ type SyncOutcome = 'pushed' | 'deleted' | 'removedRemotely';
 
 const CALENDAR_ID = 'primary';
 
-const statusOf = (error: any): number =>
-  Number(error?.status ?? error?.response?.status ?? error?.code);
-
-// Sự kiện không còn trên Google (đã bị xóa từ phía Google)
-export const isGone = (error: unknown) => [404, 410].includes(statusOf(error));
-
 /**
  * Đồng bộ MỘT CHIỀU Local -> Google Calendar. Local là nguồn dữ liệu gốc.
  */
 @Injectable()
 export class CalendarSyncService implements OnApplicationBootstrap {
   private readonly logger = new Logger(CalendarSyncService.name);
-  private running = false;
+  private readonly lock = { running: false };
 
   constructor(
     private readonly prisma: PrismaService,
@@ -57,16 +53,10 @@ export class CalendarSyncService implements OnApplicationBootstrap {
    * Khởi tạo Google Calendar Client với OAuth2 Tokens của Master User
    */
   private async getGoogleCalendarClient() {
-    const user = await this.prisma.user.findFirst({
-      where: { googleAccessToken: { not: null } },
-      select: { id: true },
-    });
-    if (!user) {
-      return null;
-    }
-
-    const auth = await this.googleClientFactory.forUser(user.id);
-    return auth ? google.calendar({ version: 'v3', auth }) : null;
+    const connected = await this.googleClientFactory.forConnectedUser();
+    return connected
+      ? google.calendar({ version: 'v3', auth: connected.auth })
+      : null;
   }
 
   /**
@@ -74,50 +64,49 @@ export class CalendarSyncService implements OnApplicationBootstrap {
    * Trả về null nếu bỏ qua (đang có lượt chạy khác hoặc chưa kết nối Google).
    */
   async syncLocalToGoogle(): Promise<CalendarSyncResult | null> {
-    if (this.running) {
-      this.logger.warn('Lượt đồng bộ trước chưa xong. Bỏ qua lượt này.');
-      return null;
-    }
-    this.running = true;
-
-    try {
-      const calendarClient = await this.getGoogleCalendarClient();
-      if (!calendarClient) {
-        this.logger.warn(
-          'Chưa kết nối tài khoản Google OAuth2. Bỏ qua đồng bộ.',
-        );
-        return null;
-      }
-
-      const dirtySyncStates = await this.prisma.calendarSyncState.findMany({
-        where: { syncStatus: 'DIRTY' },
-        include: { localEvent: true },
-      });
-
-      const result: CalendarSyncResult = {
-        pushed: 0,
-        deleted: 0,
-        removedRemotely: 0,
-        failed: 0,
-      };
-
-      for (const syncState of dirtySyncStates) {
-        try {
-          result[await this.syncOne(calendarClient, syncState)]++;
-        } catch (error) {
-          result.failed++;
-          this.logger.error(
-            `Lỗi khi đồng bộ sự kiện ID ${syncState.localEventId} lên Google Calendar:`,
-            error,
+    return runExclusive(
+      this.lock,
+      async () => {
+        const calendarClient = await this.getGoogleCalendarClient();
+        if (!calendarClient) {
+          this.logger.warn(
+            'Chưa kết nối tài khoản Google OAuth2. Bỏ qua đồng bộ.',
           );
+          return null;
         }
-      }
 
-      this.logger.log(`Kết quả đồng bộ: ${JSON.stringify(result)}`);
-      return result;
-    } finally {
-      this.running = false;
-    }
+        const dirtySyncStates = await this.prisma.calendarSyncState.findMany({
+          where: { syncStatus: 'DIRTY' },
+          include: { localEvent: true },
+        });
+
+        const result: CalendarSyncResult = {
+          pushed: 0,
+          deleted: 0,
+          removedRemotely: 0,
+          failed: 0,
+        };
+
+        for (const syncState of dirtySyncStates) {
+          try {
+            result[await this.syncOne(calendarClient, syncState)]++;
+          } catch (error) {
+            result.failed++;
+            this.logger.error(
+              `Lỗi khi đồng bộ sự kiện ID ${syncState.localEventId} lên Google Calendar:`,
+              error,
+            );
+          }
+        }
+
+        this.logger.log(`Kết quả đồng bộ: ${JSON.stringify(result)}`);
+        return result;
+      },
+      () => {
+        this.logger.warn('Lượt đồng bộ trước chưa xong. Bỏ qua lượt này.');
+        return null;
+      },
+    );
   }
 
   private async syncOne(

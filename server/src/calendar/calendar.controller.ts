@@ -16,6 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { CalendarSyncService } from './calendar-sync.service';
 import { CalendarService } from './calendar.service';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -32,7 +33,8 @@ export class CalendarController {
   ) {}
 
   @ApiOperation({
-    summary: 'Đẩy ngay các thay đổi lịch cục bộ lên Google Calendar (một chiều)',
+    summary:
+      'Đẩy ngay các thay đổi lịch cục bộ lên Google Calendar (một chiều)',
   })
   @ApiResponse({
     status: 200,
@@ -41,15 +43,13 @@ export class CalendarController {
   })
   @Post('sync')
   @HttpCode(HttpStatus.OK)
-  async syncNow() {
-    const data = await this.calendarSyncService.syncLocalToGoogle();
-    return {
-      statusCode: HttpStatus.OK,
-      message: data
-        ? 'Đồng bộ Google Calendar hoàn tất'
-        : 'Bỏ qua đồng bộ (chưa kết nối Google hoặc đang có lượt đồng bộ khác)',
-      data,
-    };
+  @ResponseMessage((data) =>
+    data
+      ? 'Đồng bộ Google Calendar hoàn tất'
+      : 'Bỏ qua đồng bộ (chưa kết nối Google hoặc đang có lượt đồng bộ khác)',
+  )
+  syncNow() {
+    return this.calendarSyncService.syncLocalToGoogle();
   }
 
   @ApiOperation({ summary: 'Tạo mới sự kiện lịch cục bộ' })
@@ -59,13 +59,9 @@ export class CalendarController {
   })
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async createEvent(@Body() createEventDto: CreateEventDto) {
-    const data = await this.calendarService.createEvent(createEventDto);
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Tạo sự kiện lịch thành công',
-      data,
-    };
+  @ResponseMessage('Tạo sự kiện lịch thành công')
+  createEvent(@Body() createEventDto: CreateEventDto) {
+    return this.calendarService.createEvent(createEventDto);
   }
 
   @ApiOperation({
@@ -79,14 +75,9 @@ export class CalendarController {
   })
   @ApiResponse({ status: 400, description: 'month/year không hợp lệ' })
   @Get()
-  @HttpCode(HttpStatus.OK)
-  async getEvents(@Query() queryDto: QueryCalendarDto) {
-    const data = await this.calendarService.getEvents(queryDto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách sự kiện lịch thành công',
-      data,
-    };
+  @ResponseMessage('Lấy danh sách sự kiện lịch thành công')
+  getEvents(@Query() queryDto: QueryCalendarDto) {
+    return this.calendarService.getEvents(queryDto);
   }
 
   @ApiOperation({ summary: 'Lấy chi tiết 1 sự kiện lịch' })
@@ -99,14 +90,9 @@ export class CalendarController {
     description: 'Không tìm thấy sự kiện',
   })
   @Get(':id')
-  @HttpCode(HttpStatus.OK)
-  async getEventById(@Param('id') id: string) {
-    const data = await this.calendarService.getEventById(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy thông tin sự kiện lịch thành công',
-      data,
-    };
+  @ResponseMessage('Lấy thông tin sự kiện lịch thành công')
+  getEventById(@Param('id') id: string) {
+    return this.calendarService.getEventById(id);
   }
 
   @ApiOperation({ summary: 'Cập nhật thông tin sự kiện lịch' })
@@ -116,16 +102,9 @@ export class CalendarController {
   })
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
-  async updateEvent(
-    @Param('id') id: string,
-    @Body() updateEventDto: UpdateEventDto,
-  ) {
-    const data = await this.calendarService.updateEvent(id, updateEventDto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật sự kiện lịch thành công',
-      data,
-    };
+  @ResponseMessage('Cập nhật sự kiện lịch thành công')
+  updateEvent(@Param('id') id: string, @Body() updateEventDto: UpdateEventDto) {
+    return this.calendarService.updateEvent(id, updateEventDto);
   }
 
   @ApiOperation({ summary: 'Xóa sự kiện lịch cục bộ' })
@@ -135,11 +114,8 @@ export class CalendarController {
   })
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Xóa sự kiện lịch thành công')
   async deleteEvent(@Param('id') id: string) {
     await this.calendarService.deleteEvent(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa sự kiện lịch thành công',
-    };
   }
 }

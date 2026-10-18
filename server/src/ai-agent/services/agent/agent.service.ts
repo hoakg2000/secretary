@@ -18,11 +18,7 @@ import {
   AiToolOptions,
 } from '../../../common/decorators/ai-tool.decorator';
 import { buildCharacterPrompt } from '../../../character/character-prompt';
-import {
-  LLM_TYPE,
-  LlmService,
-  stripJsonFence,
-} from '../../../llm/llm.service';
+import { LLM_TYPE, LlmService, stripJsonFence } from '../../../llm/llm.service';
 import { LlmMessage, LlmTool, LlmToolCall } from '../../../llm/llm.types';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatStreamDto } from '../../dto/chat-stream.dto';
@@ -177,10 +173,7 @@ export class AgentService implements OnModuleInit {
     const characterPrompt = buildCharacterPrompt(character);
     if (characterPrompt) sections.push(characterPrompt);
 
-    const timeZone = this.configService.get<string>(
-      'APP_TIMEZONE',
-      'Asia/Ho_Chi_Minh',
-    );
+    const timeZone = this.configService.getOrThrow<string>('APP_TIMEZONE');
     sections.push(
       `Thời gian hiện tại: ${new Date().toLocaleString('sv-SE', { timeZone })} (múi giờ ${timeZone}). Dùng mốc này để hiểu các từ như "hôm nay", "ngày mai".`,
     );

@@ -274,7 +274,9 @@ export class AuthService {
       }
       userId = payload.sub;
     } catch {
-      throw new BadRequestException('Tham số state không hợp lệ hoặc đã hết hạn');
+      throw new BadRequestException(
+        'Tham số state không hợp lệ hoặc đã hết hạn',
+      );
     }
 
     // 2. Đổi mã Authorization Code lấy Access & Refresh Tokens từ Google

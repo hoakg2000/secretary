@@ -1,7 +1,9 @@
 import { ValidationPipe } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
 
 /** Cấu hình HTTP dùng chung cho main.ts và các lần khởi động app khác (e2e) */
 export function configureApp(app: NestExpressApplication) {
@@ -25,6 +27,8 @@ export function configureApp(app: NestExpressApplication) {
       transform: true,
     }),
   );
+
+  app.useGlobalInterceptors(new ResponseEnvelopeInterceptor(new Reflector()));
 
   app.enableCors({
     origin: process.env.CLIENT_URL || 'http://localhost:3000',

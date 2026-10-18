@@ -109,10 +109,7 @@ export class CalendarService {
    * Bỏ trống month/year = tháng/năm hiện tại.
    */
   async getEvents(queryDto: QueryCalendarDto) {
-    const timeZone = this.configService.get<string>(
-      'APP_TIMEZONE',
-      'Asia/Ho_Chi_Minh',
-    );
+    const timeZone = this.configService.getOrThrow<string>('APP_TIMEZONE');
     const now = zonedParts(Date.now(), timeZone);
     const year = queryDto.year ?? now.year;
     const month = queryDto.month ?? now.month;

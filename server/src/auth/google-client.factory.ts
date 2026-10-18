@@ -76,4 +76,14 @@ export class GoogleClientFactory {
 
     return client;
   }
+
+  /** User đầu tiên đã kết nối Google cùng OAuth2 client của họ; null nếu chưa ai kết nối */
+  async forConnectedUser() {
+    const user = await this.prisma.user.findFirst({
+      where: { googleAccessToken: { not: null } },
+      select: { id: true, gmailHistoryId: true },
+    });
+    const auth = user && (await this.forUser(user.id));
+    return user && auth ? { user, auth } : null;
+  }
 }

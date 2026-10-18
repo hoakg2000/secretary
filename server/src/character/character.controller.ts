@@ -14,6 +14,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { CharacterService } from './character.service';
 import { CreateCharacterDto } from './dto/create-character.dto';
 import { UpdateCharacterDto } from './dto/update-character.dto';
@@ -27,6 +28,7 @@ export class CharacterController {
   // ==================== CHARACTER ENDPOINTS ====================
 
   @Post()
+  @ResponseMessage('Tạo Character thành công')
   @ApiOperation({ summary: 'Tạo mới một Character' })
   @ApiResponse({
     status: HttpStatus.CREATED,
@@ -36,32 +38,23 @@ export class CharacterController {
     status: HttpStatus.BAD_REQUEST,
     description: 'Dữ liệu đầu vào không hợp lệ.',
   })
-  async createCharacter(@Body() createCharacterDto: CreateCharacterDto) {
-    const data =
-      await this.characterService.createCharacter(createCharacterDto);
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Tạo Character thành công',
-      data,
-    };
+  createCharacter(@Body() createCharacterDto: CreateCharacterDto) {
+    return this.characterService.createCharacter(createCharacterDto);
   }
 
   @Get()
+  @ResponseMessage('Lấy danh sách Character thành công')
   @ApiOperation({ summary: 'Lấy danh sách tất cả Character' })
   @ApiResponse({
     status: HttpStatus.OK,
     description: 'Lấy danh sách Character thành công.',
   })
-  async findAllCharacters() {
-    const data = await this.characterService.findAllCharacters();
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách Character thành công',
-      data,
-    };
+  findAllCharacters() {
+    return this.characterService.findAllCharacters();
   }
 
   @Get(':id')
+  @ResponseMessage('Lấy thông tin Character thành công')
   @ApiOperation({ summary: 'Lấy thông tin chi tiết một Character theo ID' })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -71,16 +64,12 @@ export class CharacterController {
     status: HttpStatus.NOT_FOUND,
     description: 'Không tìm thấy Character.',
   })
-  async findCharacterById(@Param('id') id: string) {
-    const data = await this.characterService.findCharacterById(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy thông tin Character thành công',
-      data,
-    };
+  findCharacterById(@Param('id') id: string) {
+    return this.characterService.findCharacterById(id);
   }
 
   @Patch(':id')
+  @ResponseMessage('Cập nhật Character thành công')
   @ApiOperation({ summary: 'Cập nhật thông tin Character' })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -90,22 +79,15 @@ export class CharacterController {
     status: HttpStatus.NOT_FOUND,
     description: 'Không tìm thấy Character.',
   })
-  async updateCharacter(
+  updateCharacter(
     @Param('id') id: string,
     @Body() updateCharacterDto: UpdateCharacterDto,
   ) {
-    const data = await this.characterService.updateCharacter(
-      id,
-      updateCharacterDto,
-    );
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật Character thành công',
-      data,
-    };
+    return this.characterService.updateCharacter(id, updateCharacterDto);
   }
 
   @Delete(':id')
+  @ResponseMessage('Xóa Character thành công')
   @ApiOperation({ summary: 'Xóa Character' })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -116,11 +98,6 @@ export class CharacterController {
     description: 'Không tìm thấy Character.',
   })
   async removeCharacter(@Param('id') id: string) {
-    const data = await this.characterService.removeCharacter(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa Character thành công',
-      data,
-    };
+    await this.characterService.removeCharacter(id);
   }
 }

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, TransactionType } from '@prisma/client';
+import { paginate } from '../common/pagination';
 import { AiTool } from '../common/decorators/ai-tool.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustBalanceDto } from './dto/adjust-balance.dto';
@@ -17,9 +18,67 @@ import { UpdateBankAccountDto } from './dto/update-bank-account.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 
+const accountNotFound = (id: string) =>
+  new NotFoundException(`Không tìm thấy tài khoản ngân hàng với ID: ${id}`);
+
+/** Biến động số dư (increment/decrement nguyên tử trong DB); revert=true để hoàn tác giao dịch */
+const balanceDelta = (
+  type: TransactionType,
+  amount: Prisma.Decimal,
+  revert = false,
+) =>
+  (type === TransactionType.INCOME) !== revert
+    ? { increment: amount }
+    : { decrement: amount };
+
+const buildTransactionWhere = ({
+  accountId,
+  categoryId,
+  type,
+  startDate,
+  endDate,
+}: {
+  accountId?: string;
+  categoryId?: string;
+  type?: TransactionType;
+  startDate?: Date;
+  endDate?: Date;
+}): Prisma.TransactionWhereInput => ({
+  ...(accountId && { accountId }),
+  ...(categoryId && { categoryId }),
+  ...(type && { type }),
+  ...((startDate || endDate) && {
+    transactionTime: {
+      ...(startDate && { gte: startDate }),
+      ...(endDate && { lte: endDate }),
+    },
+  }),
+});
+
 @Injectable()
 export class FinanceService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Danh mục phải tồn tại và cùng loại với giao dịch */
+  private async assertCategoryMatches(
+    client: Prisma.TransactionClient | PrismaService,
+    categoryId: string,
+    type: TransactionType,
+  ) {
+    const category = await client.category.findUnique({
+      where: { id: categoryId },
+    });
+    if (!category) {
+      throw new NotFoundException(
+        `Không tìm thấy danh mục với ID: ${categoryId}`,
+      );
+    }
+    if (category.type !== type) {
+      throw new BadRequestException(
+        `Danh mục loại ${category.type} không dùng được cho giao dịch ${type}`,
+      );
+    }
+  }
 
   // ==========================================
   // BANK ACCOUNT SERVICES
@@ -56,11 +115,7 @@ export class FinanceService {
       },
     });
 
-    if (!account) {
-      throw new NotFoundException(
-        `Không tìm thấy tài khoản ngân hàng với ID: ${id}`,
-      );
-    }
+    if (!account) throw accountNotFound(id);
 
     return account;
   }
@@ -106,11 +161,7 @@ export class FinanceService {
   async adjustBalance(id: string, dto: AdjustBalanceDto) {
     return this.prisma.$transaction(async (tx) => {
       const account = await tx.bankAccount.findUnique({ where: { id } });
-      if (!account) {
-        throw new NotFoundException(
-          `Không tìm thấy tài khoản ngân hàng với ID: ${id}`,
-        );
-      }
+      if (!account) throw accountNotFound(id);
 
       const delta = new Prisma.Decimal(dto.newBalance).minus(
         account.cachedBalance,
@@ -215,23 +266,14 @@ export class FinanceService {
       where: { id: dto.accountId },
     });
 
-    if (!account) {
-      throw new NotFoundException(
-        `Không tìm thấy tài khoản ngân hàng với ID: ${dto.accountId}`,
-      );
-    }
+    if (!account) throw accountNotFound(dto.accountId);
     if (!account.isActive) {
       throw new BadRequestException('Tài khoản ngân hàng đã ngừng hoạt động');
     }
 
     // 2. Danh mục (nếu có) phải cùng loại với giao dịch
     if (dto.categoryId) {
-      const category = await this.getCategoryById(dto.categoryId);
-      if (category.type !== dto.type) {
-        throw new BadRequestException(
-          `Danh mục loại ${category.type} không dùng được cho giao dịch ${dto.type}`,
-        );
-      }
+      await this.assertCategoryMatches(this.prisma, dto.categoryId, dto.type);
     }
 
     // 3. Email log (nếu có) phải tồn tại
@@ -254,10 +296,7 @@ export class FinanceService {
       await tx.bankAccount.update({
         where: { id: dto.accountId },
         data: {
-          cachedBalance:
-            dto.type === TransactionType.INCOME
-              ? { increment: amount }
-              : { decrement: amount },
+          cachedBalance: balanceDelta(dto.type, amount),
         },
       });
 
@@ -281,52 +320,36 @@ export class FinanceService {
   }
 
   async getAllTransactions(filterDto: FilterTransactionDto) {
-    const { accountId, categoryId, type, startDate, endDate } = filterDto;
-    const page = filterDto.page ?? 1;
-    const pageSize = filterDto.pageSize ?? 20;
+    const where = buildTransactionWhere(filterDto);
 
-    const where: Prisma.TransactionWhereInput = {};
-
-    if (accountId) where.accountId = accountId;
-    if (categoryId) where.categoryId = categoryId;
-    if (type) where.type = type;
-
-    if (startDate || endDate) {
-      where.transactionTime = {
-        ...(startDate && { gte: startDate }),
-        ...(endDate && { lte: endDate }),
-      };
-    }
-
-    const [items, total] = await Promise.all([
-      this.prisma.transaction.findMany({
-        where,
-        include: {
-          account: {
-            select: {
-              id: true,
-              accountName: true,
-              bankCode: true,
-              accountNumber: true,
+    return paginate(
+      filterDto,
+      (range) =>
+        this.prisma.transaction.findMany({
+          where,
+          include: {
+            account: {
+              select: {
+                id: true,
+                accountName: true,
+                bankCode: true,
+                accountNumber: true,
+              },
+            },
+            category: {
+              select: {
+                id: true,
+                name: true,
+                icon: true,
+                type: true,
+              },
             },
           },
-          category: {
-            select: {
-              id: true,
-              name: true,
-              icon: true,
-              type: true,
-            },
-          },
-        },
-        orderBy: { transactionTime: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      this.prisma.transaction.count({ where }),
-    ]);
-
-    return { items, total, page, pageSize };
+          orderBy: { transactionTime: 'desc' },
+          ...range,
+        }),
+      () => this.prisma.transaction.count({ where }),
+    );
   }
 
   async getTransactionById(id: string) {
@@ -370,48 +393,24 @@ export class FinanceService {
       const account = await tx.bankAccount.findUnique({
         where: { id: accountId },
       });
-      if (!account) {
-        throw new NotFoundException(
-          `Không tìm thấy tài khoản ngân hàng với ID: ${accountId}`,
-        );
-      }
+      if (!account) throw accountNotFound(accountId);
       // Chỉ chặn khi chuyển sang tài khoản ngừng hoạt động; sửa giao dịch cũ trên tài khoản đã đóng vẫn được
       if (accountId !== existing.accountId && !account.isActive) {
         throw new BadRequestException('Tài khoản ngân hàng đã ngừng hoạt động');
       }
 
-      if (categoryId) {
-        const category = await tx.category.findUnique({
-          where: { id: categoryId },
-        });
-        if (!category) {
-          throw new NotFoundException(
-            `Không tìm thấy danh mục với ID: ${categoryId}`,
-          );
-        }
-        if (category.type !== type) {
-          throw new BadRequestException(
-            `Danh mục loại ${category.type} không dùng được cho giao dịch ${type}`,
-          );
-        }
-      }
+      if (categoryId) await this.assertCategoryMatches(tx, categoryId, type);
 
       await tx.bankAccount.update({
         where: { id: existing.accountId },
         data: {
-          cachedBalance:
-            existing.type === TransactionType.INCOME
-              ? { decrement: existing.amount }
-              : { increment: existing.amount },
+          cachedBalance: balanceDelta(existing.type, existing.amount, true),
         },
       });
       await tx.bankAccount.update({
         where: { id: accountId },
         data: {
-          cachedBalance:
-            type === TransactionType.INCOME
-              ? { increment: amount }
-              : { decrement: amount },
+          cachedBalance: balanceDelta(type, amount),
         },
       });
 
@@ -433,15 +432,7 @@ export class FinanceService {
 
   /** Tổng thu/chi theo từng loại tiền tệ (Transaction không có currency nên lấy qua tài khoản). */
   async getSummary(dto: SummaryQueryDto) {
-    const { accountId, startDate, endDate } = dto;
-    const where: Prisma.TransactionWhereInput = {};
-    if (accountId) where.accountId = accountId;
-    if (startDate || endDate) {
-      where.transactionTime = {
-        ...(startDate && { gte: startDate }),
-        ...(endDate && { lte: endDate }),
-      };
-    }
+    const where = buildTransactionWhere(dto);
 
     const groups = await this.prisma.transaction.groupBy({
       by: ['accountId', 'type'],
@@ -493,10 +484,11 @@ export class FinanceService {
       await tx.bankAccount.update({
         where: { id: transaction.accountId },
         data: {
-          cachedBalance:
-            transaction.type === TransactionType.INCOME
-              ? { decrement: transaction.amount }
-              : { increment: transaction.amount },
+          cachedBalance: balanceDelta(
+            transaction.type,
+            transaction.amount,
+            true,
+          ),
         },
       });
     });
@@ -554,7 +546,7 @@ export class FinanceService {
         type: 'string',
         description:
           'Loại giao dịch: INCOME (Thu nhập) hoặc EXPENSE (Chi tiêu)',
-        enum: ['INCOME', 'EXPENSE'],
+        enum: Object.values(TransactionType),
         required: true,
       },
       categoryId: {
@@ -598,10 +590,15 @@ export class FinanceService {
         description: 'ID tài khoản ngân hàng',
         required: false,
       },
+      categoryId: {
+        type: 'string',
+        description: 'ID danh mục thu/chi',
+        required: false,
+      },
       type: {
         type: 'string',
         description: 'INCOME hoặc EXPENSE',
-        enum: ['INCOME', 'EXPENSE'],
+        enum: Object.values(TransactionType),
         required: false,
       },
       startDate: {
@@ -612,6 +609,16 @@ export class FinanceService {
       endDate: {
         type: 'string',
         description: 'Thời gian kết thúc (ISO8601)',
+        required: false,
+      },
+      page: {
+        type: 'number',
+        description: 'Trang (bắt đầu từ 1, mặc định 1)',
+        required: false,
+      },
+      pageSize: {
+        type: 'number',
+        description: 'Số giao dịch mỗi trang (mặc định 20, tối đa 100)',
         required: false,
       },
     },

@@ -1,17 +1,10 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { TransactionType } from '@prisma/client';
 import { Type } from 'class-transformer';
-import {
-  IsDate,
-  IsEnum,
-  IsInt,
-  IsOptional,
-  IsUUID,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsDate, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 
-export class FilterTransactionDto {
+export class FilterTransactionDto extends PaginationDto(100) {
   @ApiPropertyOptional({ description: 'Lọc theo ID tài khoản ngân hàng' })
   @IsUUID()
   @IsOptional()
@@ -47,22 +40,4 @@ export class FilterTransactionDto {
   @IsDate()
   @IsOptional()
   endDate?: Date;
-
-  @ApiPropertyOptional({ description: 'Trang (bắt đầu từ 1)', default: 1 })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @IsOptional()
-  page?: number;
-
-  @ApiPropertyOptional({
-    description: 'Số giao dịch mỗi trang (tối đa 100)',
-    default: 20,
-  })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  @IsOptional()
-  pageSize?: number;
 }

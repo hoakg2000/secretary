@@ -9,7 +9,6 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   RequestMethod,
   Res,
   Sse,
@@ -20,9 +19,14 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { Readable } from 'node:stream';
 import { Observable } from 'rxjs';
+import {
+  AuthUser,
+  CurrentUser,
+} from '../common/decorators/current-user.decorator';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { ChatStreamDto } from './dto/chat-stream.dto';
 import { ListChatDto } from './dto/list-chat.dto';
 import { ListMemoryDto } from './dto/list-memory.dto';
@@ -50,26 +54,17 @@ export class AiAgentController {
   @ApiResponse({ status: 201, description: 'Lưu ký ức thành công' })
   @Post('memories')
   @HttpCode(HttpStatus.CREATED)
-  async saveMemory(@Body() dto: SaveMemoryDto) {
-    const data = await this.memoryService.saveMemory(dto);
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Lưu ký ức AI thành công',
-      data,
-    };
+  @ResponseMessage('Lưu ký ức AI thành công')
+  saveMemory(@Body() dto: SaveMemoryDto) {
+    return this.memoryService.saveMemory(dto);
   }
 
   @ApiOperation({ summary: 'Danh sách ký ức AI (mới nhất trước, phân trang)' })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @Get('memories')
-  @HttpCode(HttpStatus.OK)
-  async listMemories(@Query() dto: ListMemoryDto) {
-    const data = await this.memoryService.listMemories(dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách ký ức thành công',
-      data,
-    };
+  @ResponseMessage('Lấy danh sách ký ức thành công')
+  listMemories(@Query() dto: ListMemoryDto) {
+    return this.memoryService.listMemories(dto);
   }
 
   @ApiOperation({
@@ -78,28 +73,18 @@ export class AiAgentController {
   @ApiResponse({ status: 200, description: 'Cập nhật ký ức thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy ký ức' })
   @Patch('memories/:id')
-  @HttpCode(HttpStatus.OK)
-  async updateMemory(@Param('id') id: string, @Body() dto: UpdateMemoryDto) {
-    const data = await this.memoryService.updateMemory(id, dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật ký ức thành công',
-      data,
-    };
+  @ResponseMessage('Cập nhật ký ức thành công')
+  updateMemory(@Param('id') id: string, @Body() dto: UpdateMemoryDto) {
+    return this.memoryService.updateMemory(id, dto);
   }
 
   @ApiOperation({ summary: 'Xóa một ký ức AI' })
   @ApiResponse({ status: 200, description: 'Xóa ký ức thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy ký ức' })
   @Delete('memories/:id')
-  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Xóa ký ức thành công')
   async deleteMemory(@Param('id') id: string) {
-    const data = await this.memoryService.deleteMemory(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa ký ức thành công',
-      data,
-    };
+    await this.memoryService.deleteMemory(id);
   }
 
   @ApiOperation({
@@ -108,13 +93,9 @@ export class AiAgentController {
   @ApiResponse({ status: 200, description: 'Tìm kiếm thành công' })
   @Post('memories/search')
   @HttpCode(HttpStatus.OK)
-  async searchMemory(@Body() dto: SearchMemoryDto) {
-    const data = await this.memoryService.searchMemory(dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Tìm kiếm ký ức ngữ nghĩa thành công',
-      data,
-    };
+  @ResponseMessage('Tìm kiếm ký ức ngữ nghĩa thành công')
+  searchMemory(@Body() dto: SearchMemoryDto) {
+    return this.memoryService.searchMemory(dto);
   }
 
   @ApiOperation({
@@ -138,10 +119,10 @@ export class AiAgentController {
   @Sse('chat/stream', { method: RequestMethod.POST })
   @HttpCode(HttpStatus.OK) // POST mặc định 201; luồng SSE trả 200 như tài liệu
   async chatStream(
-    @Req() req: Request & { user: { userId: string } },
+    @CurrentUser() user: AuthUser,
     @Body() dto: ChatStreamDto,
   ): Promise<Observable<{ data: string }>> {
-    return this.agentService.chatStream(req.user.userId, dto);
+    return this.agentService.chatStream(user.userId, dto);
   }
 
   @ApiOperation({
@@ -149,21 +130,13 @@ export class AiAgentController {
   })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @Get('sessions')
-  @HttpCode(HttpStatus.OK)
-  async listSessions(
-    @Req() req: Request & { user: { userId: string } },
-    @Query() dto: ListChatDto,
-  ) {
-    const data = await this.chatSessionService.listSessions(
-      req.user.userId,
+  @ResponseMessage('Lấy danh sách phiên chat thành công')
+  listSessions(@CurrentUser() user: AuthUser, @Query() dto: ListChatDto) {
+    return this.chatSessionService.listSessions(
+      user.userId,
       dto.page,
       dto.pageSize,
     );
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách phiên chat thành công',
-      data,
-    };
   }
 
   @ApiOperation({
@@ -172,43 +145,27 @@ export class AiAgentController {
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy phiên chat' })
   @Get('sessions/:id/messages')
-  @HttpCode(HttpStatus.OK)
-  async listMessages(
-    @Req() req: Request & { user: { userId: string } },
+  @ResponseMessage('Lấy danh sách tin nhắn thành công')
+  listMessages(
+    @CurrentUser() user: AuthUser,
     @Param('id') id: string,
     @Query() dto: ListChatDto,
   ) {
-    const data = await this.chatSessionService.listMessages(
-      req.user.userId,
+    return this.chatSessionService.listMessages(
+      user.userId,
       id,
       dto.page,
       dto.pageSize,
     );
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách tin nhắn thành công',
-      data,
-    };
   }
 
   @ApiOperation({ summary: 'Xóa một phiên chat cùng các tin nhắn của nó' })
   @ApiResponse({ status: 200, description: 'Xóa phiên chat thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy phiên chat' })
   @Delete('sessions/:id')
-  @HttpCode(HttpStatus.OK)
-  async deleteSession(
-    @Req() req: Request & { user: { userId: string } },
-    @Param('id') id: string,
-  ) {
-    const data = await this.chatSessionService.deleteSession(
-      req.user.userId,
-      id,
-    );
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa phiên chat thành công',
-      data,
-    };
+  @ResponseMessage('Xóa phiên chat thành công')
+  async deleteSession(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.chatSessionService.deleteSession(user.userId, id);
   }
 
   @ApiOperation({
@@ -222,29 +179,21 @@ export class AiAgentController {
   })
   @Post('actions/:actionId/confirm')
   @HttpCode(HttpStatus.OK)
-  async confirmAction(@Param('actionId') actionId: string) {
-    const data = await this.agentService.confirmAction(actionId);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Đã thực thi hành động',
-      data,
-    };
+  @ResponseMessage('Đã thực thi hành động')
+  confirmAction(@Param('actionId') actionId: string) {
+    return this.agentService.confirmAction(actionId);
   }
 
   @ApiOperation({ summary: 'Từ chối một hành động do AI đề xuất' })
   @ApiResponse({ status: 200, description: 'Đã hủy hành động' })
   @ApiResponse({ status: 404, description: 'Hành động không tồn tại' })
   @Delete('actions/:actionId')
-  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Đã hủy hành động')
   discardAction(@Param('actionId') actionId: string) {
-    const data = this.agentService.discardAction(actionId);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Đã hủy hành động',
-      data,
-    };
+    this.agentService.discardAction(actionId);
   }
 
+  // Không gắn @ResponseMessage: trả luồng audio qua @Res nên không bọc envelope
   @ApiOperation({
     summary:
       'Chuyển câu thoại văn bản thành file âm thanh MP3 Stream (Fish.audio)',
@@ -260,14 +209,11 @@ export class AiAgentController {
   @Post('tts')
   @HttpCode(HttpStatus.OK)
   async textToSpeech(
-    @Req() req: Request & { user: { userId: string } },
+    @CurrentUser() user: AuthUser,
     @Body() dto: TtsRequestDto,
     @Res() res: Response,
   ) {
-    const audioStream = await this.ttsService.textToSpeech(
-      req.user.userId,
-      dto,
-    );
+    const audioStream = await this.ttsService.textToSpeech(user.userId, dto);
 
     res.set({
       'Content-Type': 'audio/mpeg',

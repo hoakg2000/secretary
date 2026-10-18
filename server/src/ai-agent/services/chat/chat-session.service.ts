@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ChatRole, Prisma } from '@prisma/client';
 import { LlmMessage } from '../../../llm/llm.types';
+import { paginate } from '../../../common/pagination';
 import { PrismaService } from '../../../prisma/prisma.service';
 
 /**
@@ -90,42 +91,40 @@ export class ChatSessionService {
   }
 
   /** Danh sách phiên chat của user, phiên có tin nhắn mới nhất trước */
-  async listSessions(userId: string, page = 1, pageSize = 20) {
+  async listSessions(userId: string, page?: number, pageSize?: number) {
     const where = { userId };
-    const [items, total] = await Promise.all([
-      this.prisma.chatSession.findMany({
-        where,
-        orderBy: { lastMessageAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      this.prisma.chatSession.count({ where }),
-    ]);
-
-    return { items, total, page, pageSize };
+    return paginate(
+      { page, pageSize },
+      (range) =>
+        this.prisma.chatSession.findMany({
+          where,
+          orderBy: { lastMessageAt: 'desc' },
+          ...range,
+        }),
+      () => this.prisma.chatSession.count({ where }),
+    );
   }
 
   /** Tin nhắn của một phiên thuộc về user, cũ trước */
   async listMessages(
     userId: string,
     sessionId: string,
-    page = 1,
-    pageSize = 20,
+    page?: number,
+    pageSize?: number,
   ) {
     await this.resolve(userId, sessionId);
 
     const where = { sessionId };
-    const [items, total] = await Promise.all([
-      this.prisma.chatMessage.findMany({
-        where,
-        orderBy: { createdAt: 'asc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      this.prisma.chatMessage.count({ where }),
-    ]);
-
-    return { items, total, page, pageSize };
+    return paginate(
+      { page, pageSize },
+      (range) =>
+        this.prisma.chatMessage.findMany({
+          where,
+          orderBy: { createdAt: 'asc' },
+          ...range,
+        }),
+      () => this.prisma.chatMessage.count({ where }),
+    );
   }
 
   /** Tin nhắn thuộc phiên của user (kèm Character của phiên); 404 nếu không có hoặc của người khác */

@@ -18,6 +18,10 @@ import { GoogleClientFactory } from '../../src/auth/google-client.factory';
 import { JwtAuthGuard } from '../../src/auth/guards/jwt-auth.guard';
 import { CalendarSyncService } from '../../src/calendar/calendar-sync.service';
 import { Public } from '../../src/common/decorators/public.decorator';
+import { ResponseMessage } from '../../src/common/decorators/response-message.decorator';
+import { ResponseEnvelopeInterceptor } from '../../src/common/interceptors/response-envelope.interceptor';
+import { paginate } from '../../src/common/pagination';
+import { firstValueFrom, of } from 'rxjs';
 import { decryptToken, encryptToken } from '../../src/common/crypto/token-cipher';
 import { EmailProcessor } from '../../src/email/email.processor';
 import { GmailPushService } from '../../src/email/gmail-push.service';
@@ -297,6 +301,57 @@ describe('misc: small services and helpers', () => {
 
     it('ignores an undefined job', async () => {
       await expect(ctx.moduleRef.get(EmailProcessor).onFailed(undefined, new Error('x'))).resolves.toBeUndefined();
+    });
+  });
+
+  describe('ResponseEnvelopeInterceptor', () => {
+    class Handlers {
+      @ResponseMessage('ok')
+      wrapped() {}
+
+      @ResponseMessage((data) => (data ? 'has data' : 'no data'))
+      dynamic() {}
+
+      // SSE / @Res(): không gắn message nên không bị bọc
+      stream() {}
+    }
+
+    const run = async (handler: () => void, data: unknown, statusCode = 200) => {
+      const context = {
+        getHandler: () => handler,
+        switchToHttp: () => ({ getResponse: () => ({ statusCode }) }),
+      } as unknown as ExecutionContext;
+      const out = new ResponseEnvelopeInterceptor(new Reflector()).intercept(context, { handle: () => of(data) });
+      return firstValueFrom(out);
+    };
+
+    it('wraps data with the real status code and the message', async () => {
+      expect(await run(Handlers.prototype.wrapped, { a: 1 }, 201)).toEqual({ statusCode: 201, message: 'ok', data: { a: 1 } });
+    });
+
+    it('answers data null when the handler returns nothing, and builds the message from the data', async () => {
+      expect(await run(Handlers.prototype.dynamic, undefined)).toEqual({ statusCode: 200, message: 'no data', data: null });
+      expect(await run(Handlers.prototype.dynamic, { x: 1 })).toEqual({ statusCode: 200, message: 'has data', data: { x: 1 } });
+    });
+
+    it('passes through handlers without @ResponseMessage', async () => {
+      const raw = { data: 'frame' };
+      expect(await run(Handlers.prototype.stream, raw)).toBe(raw);
+    });
+  });
+
+  describe('paginate', () => {
+    const rows = [1, 2, 3, 4, 5];
+    const find = async ({ skip, take }: { skip: number; take: number }) => rows.slice(skip, skip + take);
+    const count = async () => rows.length;
+
+    it('applies the defaults', async () => {
+      expect(await paginate({}, find, count)).toEqual({ items: rows, total: 5, page: 1, pageSize: 20 });
+    });
+
+    it('returns a partial last page and an empty page past the end', async () => {
+      expect(await paginate({ page: 3, pageSize: 2 }, find, count)).toEqual({ items: [5], total: 5, page: 3, pageSize: 2 });
+      expect(await paginate({ page: 9, pageSize: 2 }, find, count)).toEqual({ items: [], total: 5, page: 9, pageSize: 2 });
     });
   });
 

@@ -10,6 +10,11 @@ export interface HybridSearchParams {
 }
 
 export class MemoryQueries {
+  /** Literal vector của pgvector từ embedding */
+  static toVector(embedding: number[]) {
+    return `[${embedding.join(',')}]`;
+  }
+
   /**
    * Raw Query cập nhật Vector Embedding và Full-Text Search TSVector cho AiMemory (Prisma v7)
    */

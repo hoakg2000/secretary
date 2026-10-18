@@ -1,8 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 
-export class ListMemoryDto {
+export class ListMemoryDto extends PaginationDto(50) {
   @ApiPropertyOptional({ description: 'Lọc theo category' })
   @IsString()
   @IsOptional()
@@ -12,19 +12,4 @@ export class ListMemoryDto {
   @IsString()
   @IsOptional()
   source?: string;
-
-  @ApiPropertyOptional({ default: 1 })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @IsOptional()
-  page?: number;
-
-  @ApiPropertyOptional({ default: 20, description: 'Tối đa 50' })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(50)
-  @IsOptional()
-  pageSize?: number;
 }

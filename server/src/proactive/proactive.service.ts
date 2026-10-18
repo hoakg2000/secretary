@@ -90,10 +90,7 @@ export class ProactiveService {
       },
     });
 
-    const timeZone = this.configService.get<string>(
-      'APP_TIMEZONE',
-      'Asia/Ho_Chi_Minh',
-    );
+    const timeZone = this.configService.getOrThrow<string>('APP_TIMEZONE');
 
     for (const event of upcomingEvents) {
       this.logger.log(
@@ -129,12 +126,7 @@ export class ProactiveService {
         type: 'string',
         description:
           'Loại trigger: URGENT_EVENT, INACTIVITY_FALLBACK, SCHEDULED_REMINDER, CUSTOM',
-        enum: [
-          'URGENT_EVENT',
-          'INACTIVITY_FALLBACK',
-          'SCHEDULED_REMINDER',
-          'CUSTOM',
-        ],
+        enum: Object.values(ProactiveTriggerType),
         required: true,
       },
       message: {
@@ -145,7 +137,7 @@ export class ProactiveService {
       channel: {
         type: 'string',
         description: 'Kênh gửi: TELEGRAM',
-        enum: ['TELEGRAM'],
+        enum: Object.values(ProactiveChannel),
         required: false,
       },
     },

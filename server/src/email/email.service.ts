@@ -5,8 +5,10 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { EmailLog, EmailRuleType, EmailStatus, Prisma } from '@prisma/client';
+import { EmailLog, EmailRuleType, EmailStatus } from '@prisma/client';
 import { Queue } from 'bullmq';
+import { paginate } from '../common/pagination';
+import { isUniqueViolation } from '../common/prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailWebhookDto } from './dto/email-webhook.dto';
 import { ListEmailLogDto } from './dto/list-email-log.dto';
@@ -48,10 +50,7 @@ export class EmailService {
         },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
+      if (isUniqueViolation(error)) {
         this.logger.warn(
           `Email trùng lặp bị bỏ qua (Message-ID: ${dto.messageId})`,
         );
@@ -80,8 +79,12 @@ export class EmailService {
       emailLog = existing;
     }
 
-    const ruleType = await this.emailRuleService.classify(emailLog);
+    return this.routeByRule(emailLog);
+  }
 
+  /** Phân loại theo rule: blacklist -> SKIPPED, còn lại -> đưa vào hàng đợi */
+  private async routeByRule(emailLog: EmailLog) {
+    const ruleType = await this.emailRuleService.classify(emailLog);
     if (ruleType === EmailRuleType.blacklist) {
       await this.updateEmailStatus(emailLog.id, EmailStatus.SKIPPED);
       return {
@@ -93,7 +96,6 @@ export class EmailService {
     }
 
     const job = await this.enqueue(emailLog, ruleType);
-
     return {
       emailLogId: emailLog.id,
       jobId: job.id ?? null,
@@ -126,21 +128,18 @@ export class EmailService {
 
   /** Danh sách email log, mới nhất trước */
   async listLogs(dto: ListEmailLogDto) {
-    const page = dto.page ?? 1;
-    const pageSize = dto.pageSize ?? 20;
     const where = { ...(dto.status && { status: dto.status }) };
 
-    const [items, total] = await Promise.all([
-      this.prisma.emailLog.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      this.prisma.emailLog.count({ where }),
-    ]);
-
-    return { items, total, page, pageSize };
+    return paginate(
+      dto,
+      (range) =>
+        this.prisma.emailLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          ...range,
+        }),
+      () => this.prisma.emailLog.count({ where }),
+    );
   }
 
   /** Xử lý lại một email FAILED: phân loại lại rồi đưa vào hàng đợi (hoặc SKIPPED nếu khớp blacklist) */
@@ -164,24 +163,7 @@ export class EmailService {
       // Job lỗi cũ vẫn được giữ (removeOnFail) với cùng jobId -> add sẽ bị bỏ qua nếu không xóa
       await (await this.emailQueue.getJob(id))?.remove();
 
-      const ruleType = await this.emailRuleService.classify(emailLog);
-      if (ruleType === EmailRuleType.blacklist) {
-        await this.updateEmailStatus(id, EmailStatus.SKIPPED);
-        return {
-          emailLogId: id,
-          jobId: null,
-          ruleType,
-          status: EmailStatus.SKIPPED,
-        };
-      }
-
-      const job = await this.enqueue(emailLog, ruleType);
-      return {
-        emailLogId: id,
-        jobId: job.id ?? null,
-        ruleType,
-        status: EmailStatus.PENDING,
-      };
+      return await this.routeByRule(emailLog);
     } catch (error) {
       // Trả về FAILED để có thể reprocess lại, tránh kẹt PENDING không có job
       await this.updateEmailStatus(id, EmailStatus.FAILED).catch((e) =>

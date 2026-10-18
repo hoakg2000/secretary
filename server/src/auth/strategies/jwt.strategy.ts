@@ -34,11 +34,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       select: { userId: true, user: { select: { isActive: true } } },
     });
 
-    if (
-      !session ||
-      session.userId !== payload.sub ||
-      !session.user.isActive
-    ) {
+    if (!session || session.userId !== payload.sub || !session.user.isActive) {
       throw new UnauthorizedException('Phiên đăng nhập không còn hiệu lực');
     }
 

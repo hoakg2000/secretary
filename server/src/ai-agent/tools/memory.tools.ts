@@ -67,10 +67,9 @@ export class MemoryTools {
     this.logger.log(`[AiTool: save_user_memory] Content: "${dto.content}"`);
     return this.memoryService.saveMemory({
       content: dto.content,
-      category: dto.category || 'GENERAL',
-      source: 'CHAT', // nguồn và decay do server quyết định, không lấy từ model
-      initialScore: dto.initialScore ?? 1.0,
-      decayFactor: 0.01,
+      category: dto.category,
+      source: 'CHAT', // nguồn do server quyết định, không lấy từ model; decay và mặc định khác do MemoryService
+      initialScore: dto.initialScore,
     });
   }
 }

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EmailStatus } from '@prisma/client';
 import { AiTool } from '../common/decorators/ai-tool.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { SearchEmailsDto } from './dto/search-emails.dto';
@@ -27,7 +28,7 @@ export class EmailTools {
         type: 'string',
         description: 'Lọc theo trạng thái xử lý email',
         required: false,
-        enum: ['PENDING', 'PROCESSED', 'SKIPPED', 'FAILED'],
+        enum: Object.values(EmailStatus),
       },
       limit: {
         type: 'number',

@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { EmailRuleType } from '@prisma/client';
 import { Public } from '../common/decorators/public.decorator';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { CreateEmailRuleDto } from './dto/create-email-rule.dto';
 import { EmailWebhookDto } from './dto/email-webhook.dto';
 import { ListEmailLogDto } from './dto/list-email-log.dto';
@@ -55,24 +56,15 @@ export class EmailController {
   })
   @Post('email/ingest')
   @HttpCode(HttpStatus.OK)
-  async ingestEmail(@Body() dto: EmailWebhookDto) {
-    const result = await this.emailService.ingest(dto);
-
-    if (!result) {
-      return {
-        statusCode: HttpStatus.OK,
-        message: 'Email đã tồn tại trong hệ thống (bỏ qua xử lý trùng lặp)',
-        data: null,
-      };
-    }
-
-    return {
-      statusCode: HttpStatus.OK,
-      message: result.jobId
+  @ResponseMessage((result) =>
+    !result
+      ? 'Email đã tồn tại trong hệ thống (bỏ qua xử lý trùng lặp)'
+      : result.jobId
         ? 'Đã tiếp nhận email và đẩy vào hàng đợi xử lý'
         : 'Đã tiếp nhận email, bỏ qua do khớp Blacklist',
-      data: result,
-    };
+  )
+  ingestEmail(@Body() dto: EmailWebhookDto) {
+    return this.emailService.ingest(dto);
   }
 
   // ==========================================
@@ -81,13 +73,9 @@ export class EmailController {
 
   @ApiOperation({ summary: 'Danh sách email log, mới nhất trước' })
   @Get('email/logs')
-  @HttpCode(HttpStatus.OK)
-  async listLogs(@Query() dto: ListEmailLogDto) {
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách email log thành công',
-      data: await this.emailService.listLogs(dto),
-    };
+  @ResponseMessage('Lấy danh sách email log thành công')
+  listLogs(@Query() dto: ListEmailLogDto) {
+    return this.emailService.listLogs(dto);
   }
 
   @ApiOperation({ summary: 'Xử lý lại một email ở trạng thái FAILED' })
@@ -99,12 +87,9 @@ export class EmailController {
   @ApiResponse({ status: 404, description: 'Không tìm thấy email log' })
   @Post('email/logs/:id/reprocess')
   @HttpCode(HttpStatus.OK)
-  async reprocess(@Param('id') id: string) {
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Đã đưa email vào hàng đợi xử lý lại',
-      data: await this.emailService.reprocess(id),
-    };
+  @ResponseMessage('Đã đưa email vào hàng đợi xử lý lại')
+  reprocess(@Param('id') id: string) {
+    return this.emailService.reprocess(id);
   }
 
   // ==========================================
@@ -127,17 +112,13 @@ export class EmailController {
   @Public()
   @Post('email/pubsub')
   @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Đã nạp email mới từ Gmail')
   async gmailPush(
     @Headers('authorization') authorization: string | undefined,
     @Body() _dto: PubSubPushDto,
   ) {
     await this.gmailPushService.verifyPushToken(authorization);
-    const fetched = await this.gmailPushService.runPass();
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Đã nạp email mới từ Gmail',
-      data: { fetched },
-    };
+    return { fetched: await this.gmailPushService.runPass() };
   }
 
   // ==========================================
@@ -147,64 +128,40 @@ export class EmailController {
   @ApiOperation({ summary: 'Tạo mới quy tắc lọc Email' })
   @Post('email-rules')
   @HttpCode(HttpStatus.CREATED)
-  async createRule(@Body() dto: CreateEmailRuleDto) {
-    const rule = await this.emailRuleService.create(dto);
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Tạo quy tắc lọc email thành công',
-      data: rule,
-    };
+  @ResponseMessage('Tạo quy tắc lọc email thành công')
+  createRule(@Body() dto: CreateEmailRuleDto) {
+    return this.emailRuleService.create(dto);
   }
 
   @ApiOperation({ summary: 'Lấy danh sách các quy tắc lọc Email' })
   @ApiQuery({ name: 'type', enum: EmailRuleType, required: false })
   @Get('email-rules')
-  @HttpCode(HttpStatus.OK)
-  async findAllRules(
+  @ResponseMessage('Lấy danh sách quy tắc lọc email thành công')
+  findAllRules(
     @Query('type', new ParseEnumPipe(EmailRuleType, { optional: true }))
     type?: EmailRuleType,
   ) {
-    const rules = await this.emailRuleService.findAll(type);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách quy tắc lọc email thành công',
-      data: rules,
-    };
+    return this.emailRuleService.findAll(type);
   }
 
   @ApiOperation({ summary: 'Lấy thông tin chi tiết một quy tắc lọc Email' })
   @Get('email-rules/:id')
-  @HttpCode(HttpStatus.OK)
-  async findOneRule(@Param('id') id: string) {
-    const rule = await this.emailRuleService.findOne(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy thông tin quy tắc thành công',
-      data: rule,
-    };
+  @ResponseMessage('Lấy thông tin quy tắc thành công')
+  findOneRule(@Param('id') id: string) {
+    return this.emailRuleService.findOne(id);
   }
 
   @ApiOperation({ summary: 'Cập nhật quy tắc lọc Email' })
   @Patch('email-rules/:id')
-  @HttpCode(HttpStatus.OK)
-  async updateRule(@Param('id') id: string, @Body() dto: UpdateEmailRuleDto) {
-    const rule = await this.emailRuleService.update(id, dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật quy tắc lọc email thành công',
-      data: rule,
-    };
+  @ResponseMessage('Cập nhật quy tắc lọc email thành công')
+  updateRule(@Param('id') id: string, @Body() dto: UpdateEmailRuleDto) {
+    return this.emailRuleService.update(id, dto);
   }
 
   @ApiOperation({ summary: 'Xóa quy tắc lọc Email' })
   @Delete('email-rules/:id')
-  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Xóa quy tắc lọc email thành công')
   async removeRule(@Param('id') id: string) {
     await this.emailRuleService.remove(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa quy tắc lọc email thành công',
-      data: null,
-    };
   }
 }

@@ -18,7 +18,12 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
+import {
+  AuthUser,
+  CurrentUser,
+} from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { LogoutDto } from './dto/logout.dto';
@@ -56,6 +61,7 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Đăng nhập thành công')
   async login(
     @Body() loginDto: LoginDto,
     @Req() req: Request,
@@ -68,14 +74,7 @@ export class AuthController {
 
     this.setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);
 
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Đăng nhập thành công',
-      data: {
-        accessToken: result.accessToken,
-        user: result.user,
-      },
-    };
+    return { accessToken: result.accessToken, user: result.user };
   }
 
   @ApiOperation({
@@ -89,6 +88,7 @@ export class AuthController {
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Làm mới Access Token thành công')
   async refreshAccessToken(
     @Req() req: Request,
     @Body() body: RefreshTokenDto,
@@ -103,13 +103,9 @@ export class AuthController {
     this.setRefreshCookie(res, result.refreshToken, result.refreshExpiresAt);
 
     return {
-      statusCode: HttpStatus.OK,
-      message: 'Làm mới Access Token thành công',
-      data: {
-        accessToken: result.accessToken,
-        // Client không dùng cookie (mobile) nhận token kế nhiệm qua body
-        ...(!fromCookie && { refreshToken: result.refreshToken }),
-      },
+      accessToken: result.accessToken,
+      // Client không dùng cookie (mobile) nhận token kế nhiệm qua body
+      ...(!fromCookie && { refreshToken: result.refreshToken }),
     };
   }
 
@@ -119,12 +115,13 @@ export class AuthController {
   })
   @Post('logout')
   @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Đăng xuất thành công')
   async logout(
-    @Req() req: Request & { user: { userId: string; sessionId: string } },
+    @CurrentUser() user: AuthUser,
     @Body() body: LogoutDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { userId, sessionId } = req.user;
+    const { userId, sessionId } = user;
     const targetSessionId = body?.sessionId ?? sessionId;
 
     await this.authService.logout(userId, targetSessionId);
@@ -136,11 +133,6 @@ export class AuthController {
         path: REFRESH_COOKIE_PATH,
       });
     }
-
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Đăng xuất thành công',
-    };
   }
 
   @ApiBearerAuth('JWT-auth')
@@ -154,21 +146,9 @@ export class AuthController {
     description: 'Chưa xác thực hoặc Token không hợp lệ',
   })
   @Get('session')
-  @HttpCode(HttpStatus.OK)
-  async getActiveSession(
-    @Req() req: Request & { user: { userId: string; sessionId: string } },
-  ) {
-    const { userId, sessionId } = req.user;
-    const sessionData = await this.authService.getActiveSession(
-      userId,
-      sessionId,
-    );
-
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy thông tin phiên đăng nhập thành công',
-      data: sessionData,
-    };
+  @ResponseMessage('Lấy thông tin phiên đăng nhập thành công')
+  getActiveSession(@CurrentUser() { userId, sessionId }: AuthUser) {
+    return this.authService.getActiveSession(userId, sessionId);
   }
 
   @ApiBearerAuth('JWT-auth')
@@ -181,15 +161,9 @@ export class AuthController {
   })
   @ApiResponse({ status: 401, description: 'Chưa xác thực' })
   @Get('google/connect')
-  @HttpCode(HttpStatus.OK)
-  async getGoogleConnectUrl(@Req() req: Request & { user: { userId: string } }) {
-    const url = this.authService.getGoogleConnectUrl(req.user.userId);
-
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy URL kết nối tài khoản Google thành công',
-      data: { url },
-    };
+  @ResponseMessage('Lấy URL kết nối tài khoản Google thành công')
+  getGoogleConnectUrl(@CurrentUser() user: AuthUser) {
+    return { url: this.authService.getGoogleConnectUrl(user.userId) };
   }
 
   @ApiOperation({
@@ -218,17 +192,11 @@ export class AuthController {
   // Google redirect trình duyệt về đây, không có Bearer token: xác thực bằng state đã ký
   @Public()
   @Get('google/callback')
-  @HttpCode(HttpStatus.OK)
-  async handleGoogleCallback(
+  @ResponseMessage('Kết nối và lưu Token Google thành công')
+  handleGoogleCallback(
     @Query('code') code: string,
     @Query('state') state: string,
   ) {
-    const result = await this.authService.handleGoogleCallback(code, state);
-
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Kết nối và lưu Token Google thành công',
-      data: result,
-    };
+    return this.authService.handleGoogleCallback(code, state);
   }
 }

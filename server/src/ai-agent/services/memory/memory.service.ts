@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { paginate } from '../../../common/pagination';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ListMemoryDto } from '../../dto/list-memory.dto';
 import { SaveMemoryDto } from '../../dto/save-memory.dto';
@@ -70,7 +71,7 @@ export class MemoryService {
       dto.content,
       'RETRIEVAL_DOCUMENT',
     );
-    const vectorStr = `[${embedding.join(',')}]`;
+    const vectorStr = MemoryQueries.toVector(embedding);
 
     // Một transaction: không để lại bản ghi thiếu vector nếu bước ghi embedding lỗi
     const memory = await this.prisma.$transaction(async (tx) => {
@@ -105,7 +106,7 @@ export class MemoryService {
 
     const results = await this.prisma.$queryRaw<MemorySearchResult[]>(
       MemoryQueries.searchHybridWithDecay({
-        vectorStr: `[${queryEmbedding.join(',')}]`,
+        vectorStr: MemoryQueries.toVector(queryEmbedding),
         query: dto.query,
         limit: dto.limit ?? 5,
         // shortcut: ngưỡng 0.5 chưa được hiệu chỉnh với dữ liệu thật; chỉnh lại khi có ký ức thật
@@ -129,24 +130,21 @@ export class MemoryService {
 
   /** Danh sách ký ức, mới nhất trước */
   async listMemories(dto: ListMemoryDto) {
-    const page = dto.page ?? 1;
-    const pageSize = dto.pageSize ?? 20;
     const where = {
       ...(dto.category && { category: dto.category }),
       ...(dto.source && { source: dto.source }),
     };
 
-    const [items, total] = await Promise.all([
-      this.prisma.aiMemory.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      this.prisma.aiMemory.count({ where }),
-    ]);
-
-    return { items, total, page, pageSize };
+    return paginate(
+      dto,
+      (range) =>
+        this.prisma.aiMemory.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          ...range,
+        }),
+      () => this.prisma.aiMemory.count({ where }),
+    );
   }
 
   /** Sửa nội dung/phân loại; đổi nội dung thì embedding + tsvector được tạo lại */
@@ -167,7 +165,7 @@ export class MemoryService {
       dto.content,
       'RETRIEVAL_DOCUMENT',
     );
-    const vectorStr = `[${embedding.join(',')}]`;
+    const vectorStr = MemoryQueries.toVector(embedding);
     const content = dto.content;
 
     return this.prisma.$transaction(async (tx) => {

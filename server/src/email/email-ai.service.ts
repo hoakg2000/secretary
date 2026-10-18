@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EmailRuleType } from '@prisma/client';
+import { EmailRuleType, TransactionType } from '@prisma/client';
 import { LLM_TYPE, LlmService, stripJsonFence } from '../llm/llm.service';
 
 const CATEGORIES = ['TRANSACTION', 'EVENT', 'OTHER'] as const;
@@ -64,7 +64,7 @@ const RESPONSE_SCHEMA = {
       type: ['object', 'null'],
       properties: {
         amount: { type: 'number' },
-        direction: { type: 'string', enum: ['INCOME', 'EXPENSE'] },
+        direction: { type: 'string', enum: Object.values(TransactionType) },
         currency: { type: 'string' },
         accountNumber: { type: 'string' },
         bankCode: { type: 'string' },
@@ -100,10 +100,7 @@ export class EmailAiService {
 
   buildPrompt(email: EmailContent, ruleType: EmailRuleType | null) {
     const boundary = randomUUID();
-    const timeZone = this.configService.get<string>(
-      'APP_TIMEZONE',
-      'Asia/Ho_Chi_Minh',
-    );
+    const timeZone = this.configService.getOrThrow<string>('APP_TIMEZONE');
     return [
       TASKS[ruleType ?? 'none'],
       `Current time: ${new Date().toISOString()}. Times in the email without an offset are in ${timeZone}.`,

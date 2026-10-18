@@ -5,7 +5,7 @@ import {
   OnApplicationBootstrap,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EmailRuleType, EmailStatus, Prisma } from '@prisma/client';
+import { EmailRuleType, EmailStatus } from '@prisma/client';
 import { Job } from 'bullmq';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -13,6 +13,7 @@ import { CalendarService } from '../calendar/calendar.service';
 import { CreateEventDto } from '../calendar/dto/create-event.dto';
 import { CreateTransactionDto } from '../finance/dto/create-transaction.dto';
 import { FinanceService } from '../finance/finance.service';
+import { isUniqueViolation } from '../common/prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProactiveTriggerType } from '../proactive/dto/trigger-proactive.dto';
 import { ProactiveService } from '../proactive/proactive.service';
@@ -177,12 +178,7 @@ export class EmailProcessor
       await this.financeService.createTransaction(dto);
     } catch (error) {
       // Retry sau khi giao dịch đã được tạo: unique transactions.email_log_id -> coi như xong
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        return;
-      }
+      if (isUniqueViolation(error)) return;
       throw error;
     }
   }

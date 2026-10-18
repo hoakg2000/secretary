@@ -20,6 +20,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { TransactionType } from '@prisma/client';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { AdjustBalanceDto } from './dto/adjust-balance.dto';
 import { CreateBankAccountDto } from './dto/create-bank-account.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
@@ -45,13 +46,9 @@ export class FinanceController {
   @ApiResponse({ status: 201, description: 'Tạo tài khoản thành công' })
   @Post('accounts')
   @HttpCode(HttpStatus.CREATED)
-  async createBankAccount(@Body() dto: CreateBankAccountDto) {
-    const data = await this.financeService.createBankAccount(dto);
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Tạo tài khoản ngân hàng thành công',
-      data,
-    };
+  @ResponseMessage('Tạo tài khoản ngân hàng thành công')
+  createBankAccount(@Body() dto: CreateBankAccountDto) {
+    return this.financeService.createBankAccount(dto);
   }
 
   @ApiOperation({
@@ -61,60 +58,40 @@ export class FinanceController {
   @ApiQuery({ name: 'includeInactive', type: Boolean, required: false })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @Get('accounts')
-  @HttpCode(HttpStatus.OK)
-  async getAllBankAccounts(
+  @ResponseMessage('Lấy danh sách tài khoản ngân hàng thành công')
+  getAllBankAccounts(
     @Query('includeInactive', new ParseBoolPipe({ optional: true }))
     includeInactive?: boolean,
   ) {
-    const data = await this.financeService.getAllBankAccounts(includeInactive);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách tài khoản ngân hàng thành công',
-      data,
-    };
+    return this.financeService.getAllBankAccounts(includeInactive);
   }
 
   @ApiOperation({ summary: 'Xem tổng hợp số dư tất cả tài khoản' })
   @ApiResponse({ status: 200, description: 'Tính tổng số dư thành công' })
   @Get('accounts/total-balance')
-  @HttpCode(HttpStatus.OK)
-  async getTotalBalance() {
-    const data = await this.financeService.getTotalBalance();
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy tổng số dư tài chính thành công',
-      data,
-    };
+  @ResponseMessage('Lấy tổng số dư tài chính thành công')
+  getTotalBalance() {
+    return this.financeService.getTotalBalance();
   }
 
   @ApiOperation({ summary: 'Lấy thông tin chi tiết một tài khoản ngân hàng' })
   @ApiResponse({ status: 200, description: 'Lấy thông tin thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy tài khoản' })
   @Get('accounts/:id')
-  @HttpCode(HttpStatus.OK)
-  async getBankAccountById(@Param('id') id: string) {
-    const data = await this.financeService.getBankAccountById(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy chi tiết tài khoản ngân hàng thành công',
-      data,
-    };
+  @ResponseMessage('Lấy chi tiết tài khoản ngân hàng thành công')
+  getBankAccountById(@Param('id') id: string) {
+    return this.financeService.getBankAccountById(id);
   }
 
   @ApiOperation({ summary: 'Cập nhật thông tin tài khoản ngân hàng' })
   @ApiResponse({ status: 200, description: 'Cập nhật thành công' })
   @Patch('accounts/:id')
-  @HttpCode(HttpStatus.OK)
-  async updateBankAccount(
+  @ResponseMessage('Cập nhật tài khoản ngân hàng thành công')
+  updateBankAccount(
     @Param('id') id: string,
     @Body() dto: UpdateBankAccountDto,
   ) {
-    const data = await this.financeService.updateBankAccount(id, dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật tài khoản ngân hàng thành công',
-      data,
-    };
+    return this.financeService.updateBankAccount(id, dto);
   }
 
   @ApiOperation({
@@ -124,14 +101,9 @@ export class FinanceController {
   @ApiResponse({ status: 200, description: 'Điều chỉnh số dư thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy tài khoản' })
   @Patch('accounts/:id/balance')
-  @HttpCode(HttpStatus.OK)
-  async adjustBalance(@Param('id') id: string, @Body() dto: AdjustBalanceDto) {
-    const data = await this.financeService.adjustBalance(id, dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Điều chỉnh số dư thành công',
-      data,
-    };
+  @ResponseMessage('Điều chỉnh số dư thành công')
+  adjustBalance(@Param('id') id: string, @Body() dto: AdjustBalanceDto) {
+    return this.financeService.adjustBalance(id, dto);
   }
 
   @ApiOperation({
@@ -140,14 +112,9 @@ export class FinanceController {
   })
   @ApiResponse({ status: 200, description: 'Xóa tài khoản thành công' })
   @Delete('accounts/:id')
-  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Xóa tài khoản ngân hàng thành công')
   async deleteBankAccount(@Param('id') id: string) {
-    const data = await this.financeService.deleteBankAccount(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa tài khoản ngân hàng thành công',
-      data,
-    };
+    await this.financeService.deleteBankAccount(id);
   }
 
   // ==========================================
@@ -158,60 +125,38 @@ export class FinanceController {
   @ApiResponse({ status: 201, description: 'Tạo danh mục thành công' })
   @Post('categories')
   @HttpCode(HttpStatus.CREATED)
-  async createCategory(@Body() dto: CreateCategoryDto) {
-    const data = await this.financeService.createCategory(dto);
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Tạo danh mục thành công',
-      data,
-    };
+  @ResponseMessage('Tạo danh mục thành công')
+  createCategory(@Body() dto: CreateCategoryDto) {
+    return this.financeService.createCategory(dto);
   }
 
   @ApiOperation({ summary: 'Lấy danh sách danh mục thu/chi' })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @ApiQuery({ name: 'type', enum: TransactionType, required: false })
   @Get('categories')
-  @HttpCode(HttpStatus.OK)
-  async getAllCategories(
+  @ResponseMessage('Lấy danh sách danh mục thành công')
+  getAllCategories(
     @Query('type', new ParseEnumPipe(TransactionType, { optional: true }))
     type?: TransactionType,
   ) {
-    const data = await this.financeService.getAllCategories(type);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách danh mục thành công',
-      data,
-    };
+    return this.financeService.getAllCategories(type);
   }
 
   @ApiOperation({ summary: 'Cập nhật danh mục thu/chi (không đổi loại)' })
   @ApiResponse({ status: 200, description: 'Cập nhật danh mục thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy danh mục' })
   @Patch('categories/:id')
-  @HttpCode(HttpStatus.OK)
-  async updateCategory(
-    @Param('id') id: string,
-    @Body() dto: UpdateCategoryDto,
-  ) {
-    const data = await this.financeService.updateCategory(id, dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật danh mục thành công',
-      data,
-    };
+  @ResponseMessage('Cập nhật danh mục thành công')
+  updateCategory(@Param('id') id: string, @Body() dto: UpdateCategoryDto) {
+    return this.financeService.updateCategory(id, dto);
   }
 
   @ApiOperation({ summary: 'Xóa danh mục thu/chi' })
   @ApiResponse({ status: 200, description: 'Xóa danh mục thành công' })
   @Delete('categories/:id')
-  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Xóa danh mục thành công')
   async deleteCategory(@Param('id') id: string) {
-    const data = await this.financeService.deleteCategory(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa danh mục thành công',
-      data,
-    };
+    await this.financeService.deleteCategory(id);
   }
 
   // ==========================================
@@ -224,13 +169,9 @@ export class FinanceController {
   @ApiResponse({ status: 201, description: 'Tạo giao dịch thành công' })
   @Post('transactions')
   @HttpCode(HttpStatus.CREATED)
-  async createTransaction(@Body() dto: CreateTransactionDto) {
-    const data = await this.financeService.createTransaction(dto);
-    return {
-      statusCode: HttpStatus.CREATED,
-      message: 'Tạo giao dịch tài chính thành công',
-      data,
-    };
+  @ResponseMessage('Tạo giao dịch tài chính thành công')
+  createTransaction(@Body() dto: CreateTransactionDto) {
+    return this.financeService.createTransaction(dto);
   }
 
   @ApiOperation({
@@ -239,13 +180,9 @@ export class FinanceController {
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @Post('transactions/search')
   @HttpCode(HttpStatus.OK)
-  async getAllTransactions(@Body() filterDto: FilterTransactionDto) {
-    const data = await this.financeService.getAllTransactions(filterDto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy danh sách giao dịch thành công',
-      data,
-    };
+  @ResponseMessage('Lấy danh sách giao dịch thành công')
+  getAllTransactions(@Body() filterDto: FilterTransactionDto) {
+    return this.financeService.getAllTransactions(filterDto);
   }
 
   @ApiOperation({
@@ -254,28 +191,18 @@ export class FinanceController {
   })
   @ApiResponse({ status: 200, description: 'Lấy tổng hợp thành công' })
   @Get('summary')
-  @HttpCode(HttpStatus.OK)
-  async getSummary(@Query() query: SummaryQueryDto) {
-    const data = await this.financeService.getSummary(query);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy tổng hợp thu chi thành công',
-      data,
-    };
+  @ResponseMessage('Lấy tổng hợp thu chi thành công')
+  getSummary(@Query() query: SummaryQueryDto) {
+    return this.financeService.getSummary(query);
   }
 
   @ApiOperation({ summary: 'Xem chi tiết giao dịch tài chính' })
   @ApiResponse({ status: 200, description: 'Lấy chi tiết thành công' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy giao dịch' })
   @Get('transactions/:id')
-  @HttpCode(HttpStatus.OK)
-  async getTransactionById(@Param('id') id: string) {
-    const data = await this.financeService.getTransactionById(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Lấy chi tiết giao dịch thành công',
-      data,
-    };
+  @ResponseMessage('Lấy chi tiết giao dịch thành công')
+  getTransactionById(@Param('id') id: string) {
+    return this.financeService.getTransactionById(id);
   }
 
   @ApiOperation({
@@ -291,17 +218,12 @@ export class FinanceController {
     description: 'Không tìm thấy giao dịch, tài khoản hoặc danh mục',
   })
   @Patch('transactions/:id')
-  @HttpCode(HttpStatus.OK)
-  async updateTransaction(
+  @ResponseMessage('Cập nhật giao dịch thành công')
+  updateTransaction(
     @Param('id') id: string,
     @Body() dto: UpdateTransactionDto,
   ) {
-    const data = await this.financeService.updateTransaction(id, dto);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Cập nhật giao dịch thành công',
-      data,
-    };
+    return this.financeService.updateTransaction(id, dto);
   }
 
   @ApiOperation({
@@ -309,13 +231,8 @@ export class FinanceController {
   })
   @ApiResponse({ status: 200, description: 'Xóa giao dịch thành công' })
   @Delete('transactions/:id')
-  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Xóa giao dịch thành công')
   async deleteTransaction(@Param('id') id: string) {
-    const data = await this.financeService.deleteTransaction(id);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'Xóa giao dịch thành công',
-      data,
-    };
+    await this.financeService.deleteTransaction(id);
   }
 }

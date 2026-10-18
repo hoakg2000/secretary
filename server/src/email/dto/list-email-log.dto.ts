@@ -1,26 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { EmailStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsEnum, IsOptional } from 'class-validator';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 
-export class ListEmailLogDto {
-  @ApiPropertyOptional({ enum: EmailStatus, description: 'Lọc theo trạng thái' })
+export class ListEmailLogDto extends PaginationDto(50) {
+  @ApiPropertyOptional({
+    enum: EmailStatus,
+    description: 'Lọc theo trạng thái',
+  })
   @IsEnum(EmailStatus)
   @IsOptional()
   status?: EmailStatus;
-
-  @ApiPropertyOptional({ default: 1 })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @IsOptional()
-  page?: number;
-
-  @ApiPropertyOptional({ default: 20, description: 'Tối đa 50' })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(50)
-  @IsOptional()
-  pageSize?: number;
 }

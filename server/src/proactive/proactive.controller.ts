@@ -1,16 +1,11 @@
-import {
-  Body,
-  Controller,
-  HttpCode,
-  HttpStatus,
-  Post,
-} from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { TriggerProactiveDto } from './dto/trigger-proactive.dto';
 import { ProactiveService } from './proactive.service';
 
@@ -39,13 +34,9 @@ export class ProactiveController {
   })
   @Post('trigger')
   @HttpCode(HttpStatus.OK)
-  async triggerProactive(@Body() dto: TriggerProactiveDto) {
-    const data = await this.proactiveService.evaluateAndTrigger(dto);
-    return {
-      statusCode: HttpStatus.OK,
-      // data.result.status: SENT (đã gửi thật), FAILED hoặc NOT_CONFIGURED
-      message: 'Đã xử lý trigger thông báo chủ động',
-      data,
-    };
+  // data.result.status: SENT (đã gửi thật), FAILED hoặc NOT_CONFIGURED
+  @ResponseMessage('Đã xử lý trigger thông báo chủ động')
+  triggerProactive(@Body() dto: TriggerProactiveDto) {
+    return this.proactiveService.evaluateAndTrigger(dto);
   }
 }
