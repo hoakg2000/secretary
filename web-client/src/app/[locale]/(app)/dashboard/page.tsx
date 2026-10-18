@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/layout/coming-soon";
+import { DashboardView } from "@/components/dashboard/dashboard-view";
 
 export default function Page() {
-  return <ComingSoon navKey="dashboard" />;
+  return <DashboardView />;
 }

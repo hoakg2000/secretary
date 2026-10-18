@@ -71,7 +71,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function LanguageSwitch() {
+export function LanguageSwitch() {
   const t = useTranslations();
   const locale = useLocale();
   const pathname = usePathname();

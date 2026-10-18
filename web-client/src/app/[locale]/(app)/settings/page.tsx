@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/layout/coming-soon";
+import { SettingsView } from "@/components/settings/settings-view";
 
 export default function Page() {
-  return <ComingSoon navKey="settings" />;
+  return <SettingsView />;
 }

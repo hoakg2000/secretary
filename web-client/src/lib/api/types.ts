@@ -317,8 +317,8 @@ export interface CategoryInput {
   budgetLimit?: number;
 }
 
-/** `type` cannot change. */
-export type CategoryUpdate = Partial<Omit<CategoryInput, "type">>;
+/** `type` cannot change; `null` clears icon / budgetLimit. */
+export type CategoryUpdate = { name?: string; icon?: string | null; budgetLimit?: number | null };
 
 export interface Transaction {
   id: Id;

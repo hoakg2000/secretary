@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/layout/coming-soon";
+import { MemoriesView } from "@/components/memories/memories-view";
 
 export default function Page() {
-  return <ComingSoon navKey="memories" />;
+  return <MemoriesView />;
 }

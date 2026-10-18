@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/layout/coming-soon";
+import { FinanceView } from "@/components/finance/finance-view";
 
 export default function Page() {
-  return <ComingSoon navKey="finance" />;
+  return <FinanceView />;
 }
