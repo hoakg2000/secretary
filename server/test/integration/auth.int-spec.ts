@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { AuthController } from '../../src/auth/auth.controller';
 import { AuthService } from '../../src/auth/auth.service';
 import { GoogleClientFactory } from '../../src/auth/google-client.factory';
 import { JwtStrategy } from '../../src/auth/strategies/jwt.strategy';
@@ -510,6 +511,111 @@ describe('auth integration', () => {
       const after = await ctx.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
       expect(after.googleRefreshToken).toBe(before.googleRefreshToken);
       expect(after.googleAccessToken).not.toBe(before.googleAccessToken);
+    });
+  });
+
+  describe('Google status and disconnect', () => {
+    it('reports connected only when a refresh token is stored', async () => {
+      const connected = await seedGoogleUser(ctx.prisma, factory);
+      const accessOnly = await seedUser(ctx.prisma, { googleAccessToken: 'v1:x' });
+      const none = await seedUser(ctx.prisma);
+
+      expect(await auth.getGoogleStatus(connected.id)).toEqual({ connected: true });
+      expect(await auth.getGoogleStatus(accessOnly.id)).toEqual({ connected: false });
+      expect(await auth.getGoogleStatus(none.id)).toEqual({ connected: false });
+    });
+
+    it('revokes the refresh token at Google, then clears tokens and the Gmail history id', async () => {
+      const user = await seedGoogleUser(ctx.prisma, factory, { refresh_token: 'the-refresh' }, { gmailHistoryId: '42' });
+      const bystander = await seedGoogleUser(ctx.prisma, factory);
+      ctx.google.revokeToken.mockResolvedValue({});
+
+      await auth.disconnectGoogle(user.id);
+
+      expect(ctx.google.revokeToken).toHaveBeenCalledWith('the-refresh');
+      const row = await ctx.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+      expect(row).toMatchObject({
+        googleAccessToken: null,
+        googleRefreshToken: null,
+        googleTokenExpiresAt: null,
+        gmailHistoryId: null,
+      });
+      expect((await ctx.prisma.user.findUniqueOrThrow({ where: { id: bystander.id } })).googleRefreshToken).not.toBeNull();
+      expect(await auth.getGoogleStatus(user.id)).toEqual({ connected: false });
+    });
+
+    it('still clears the tokens when Google refuses the revoke', async () => {
+      const user = await seedGoogleUser(ctx.prisma, factory);
+      ctx.google.revokeToken.mockRejectedValue(new Error('invalid_token'));
+
+      await auth.disconnectGoogle(user.id);
+
+      const row = await ctx.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+      expect(row.googleAccessToken).toBeNull();
+      expect(row.googleRefreshToken).toBeNull();
+    });
+
+    it('skips the revoke for a user that is not connected', async () => {
+      const user = await seedUser(ctx.prisma);
+
+      await auth.disconnectGoogle(user.id);
+
+      expect(ctx.google.revokeToken).not.toHaveBeenCalled();
+    });
+
+    it('leaves no client for a disconnected user', async () => {
+      const user = await seedGoogleUser(ctx.prisma, factory);
+      ctx.google.revokeToken.mockResolvedValue({});
+
+      await auth.disconnectGoogle(user.id);
+
+      expect(await factory.forUser(user.id)).toBeNull();
+      expect(await factory.forConnectedUser()).toBeNull();
+    });
+  });
+
+  describe('AuthController google callback redirect', () => {
+    let controller: AuthController;
+    const redirectOf = async (code?: string, state?: string) => {
+      const res = { redirect: vi.fn() };
+      await controller.handleGoogleCallback(code as string, state as string, res as any);
+      expect(res.redirect).toHaveBeenCalledTimes(1);
+      return res.redirect.mock.calls[0] as [number, string];
+    };
+    const stateFor = (userId: string) => new URL(auth.getGoogleConnectUrl(userId)).searchParams.get('state')!;
+
+    beforeAll(() => {
+      controller = ctx.moduleRef.get(AuthController);
+    });
+
+    it('redirects to settings with google=connected on success', async () => {
+      const user = await seedUser(ctx.prisma);
+      ctx.google.getToken.mockResolvedValue({ tokens: { access_token: 'a', refresh_token: 'r' } });
+
+      expect(await redirectOf('code', stateFor(user.id))).toEqual([302, 'http://localhost:3001/settings?google=connected']);
+      expect((await auth.getGoogleStatus(user.id)).connected).toBe(true);
+    });
+
+    it('redirects with reason missing_code', async () => {
+      expect(await redirectOf(undefined, 'state')).toEqual([302, 'http://localhost:3001/settings?google=error&reason=missing_code']);
+    });
+
+    it('redirects with reason invalid_state', async () => {
+      expect(await redirectOf('code', 'forged')).toEqual([302, 'http://localhost:3001/settings?google=error&reason=invalid_state']);
+    });
+
+    it('redirects with reason no_token when Google returns no access token', async () => {
+      const user = await seedUser(ctx.prisma);
+      ctx.google.getToken.mockResolvedValue({ tokens: {} });
+
+      expect(await redirectOf('code', stateFor(user.id))).toEqual([302, 'http://localhost:3001/settings?google=error&reason=no_token']);
+    });
+
+    it('redirects with reason exchange_failed when the token exchange throws', async () => {
+      const user = await seedUser(ctx.prisma);
+      ctx.google.getToken.mockRejectedValue(new Error('invalid_grant'));
+
+      expect(await redirectOf('bad', stateFor(user.id))).toEqual([302, 'http://localhost:3001/settings?google=error&reason=exchange_failed']);
     });
   });
 

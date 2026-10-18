@@ -85,6 +85,7 @@ export class FinanceController {
 
   @ApiOperation({ summary: 'Cập nhật thông tin tài khoản ngân hàng' })
   @ApiResponse({ status: 200, description: 'Cập nhật thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy tài khoản' })
   @Patch('accounts/:id')
   @ResponseMessage('Cập nhật tài khoản ngân hàng thành công')
   updateBankAccount(
@@ -110,9 +111,13 @@ export class FinanceController {
     summary:
       'Xóa tài khoản ngân hàng (đã có giao dịch thì chỉ chuyển sang ngừng hoạt động)',
   })
-  @ApiResponse({ status: 200, description: 'Xóa tài khoản thành công' })
+  @ApiResponse({
+    status: 200,
+    description: 'Xóa hoặc vô hiệu hóa tài khoản thành công',
+  })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy tài khoản' })
   @Delete('accounts/:id')
-  @ResponseMessage('Xóa tài khoản ngân hàng thành công')
+  @ResponseMessage('Xóa hoặc vô hiệu hóa tài khoản thành công')
   async deleteBankAccount(@Param('id') id: string) {
     await this.financeService.deleteBankAccount(id);
   }
@@ -153,6 +158,7 @@ export class FinanceController {
 
   @ApiOperation({ summary: 'Xóa danh mục thu/chi' })
   @ApiResponse({ status: 200, description: 'Xóa danh mục thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy danh mục' })
   @Delete('categories/:id')
   @ResponseMessage('Xóa danh mục thành công')
   async deleteCategory(@Param('id') id: string) {
@@ -167,6 +173,14 @@ export class FinanceController {
     summary: 'Tạo giao dịch tài chính mới (tự động cập nhật số dư tài khoản)',
   })
   @ApiResponse({ status: 201, description: 'Tạo giao dịch thành công' })
+  @ApiResponse({
+    status: 400,
+    description: 'Tài khoản ngừng hoạt động hoặc danh mục sai loại',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Không tìm thấy tài khoản hoặc danh mục',
+  })
   @Post('transactions')
   @HttpCode(HttpStatus.CREATED)
   @ResponseMessage('Tạo giao dịch tài chính thành công')
@@ -230,6 +244,7 @@ export class FinanceController {
     summary: 'Xóa giao dịch tài chính (hoàn tác biến động số dư)',
   })
   @ApiResponse({ status: 200, description: 'Xóa giao dịch thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy giao dịch' })
   @Delete('transactions/:id')
   @ResponseMessage('Xóa giao dịch thành công')
   async deleteTransaction(@Param('id') id: string) {

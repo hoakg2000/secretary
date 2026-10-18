@@ -241,6 +241,9 @@ export class AgentService implements OnModuleInit {
         `Không tìm thấy Character với ID: ${dto.characterId}`,
       );
     }
+    if (existing && !existing.title) {
+      await this.chatSessions.setTitleIfEmpty(existing.id, dto.message);
+    }
     const session =
       existing ??
       (await this.chatSessions.create(

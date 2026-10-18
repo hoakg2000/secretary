@@ -106,6 +106,53 @@ describe('chat integration', () => {
       });
     });
 
+    describe('createForCharacter and rename', () => {
+      it('creates an untitled session for an existing character', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await seedCharacter(ctx.prisma);
+
+        const session = await sessions.createForCharacter(user.id, character.id);
+
+        expect(session).toMatchObject({ userId: user.id, characterId: character.id, title: null });
+      });
+
+      it('stores a given title', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await seedCharacter(ctx.prisma);
+
+        expect((await sessions.createForCharacter(user.id, character.id, 'Trip')).title).toBe('Trip');
+      });
+
+      it('returns 404 for an unknown character and creates nothing', async () => {
+        const user = await seedUser(ctx.prisma);
+
+        await expect(sessions.createForCharacter(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+
+        expect(await ctx.prisma.chatSession.count()).toBe(0);
+      });
+
+      it('renames the user own session', async () => {
+        const user = await seedUser(ctx.prisma);
+        const own = await makeSession(user.id, { title: 'old' });
+
+        const renamed = await sessions.rename(user.id, own.id, 'new');
+
+        expect(renamed.title).toBe('new');
+        expect((await sessions.findOwn(user.id, own.id)).title).toBe('new');
+      });
+
+      it('returns 404 renaming a foreign or unknown session and leaves the title', async () => {
+        const owner = await seedUser(ctx.prisma);
+        const other = await seedUser(ctx.prisma);
+        const foreign = await makeSession(owner.id, { title: 'mine' });
+
+        await expect(sessions.rename(other.id, foreign.id, 'x')).rejects.toBeInstanceOf(NotFoundException);
+        await expect(sessions.rename(owner.id, MISSING, 'x')).rejects.toBeInstanceOf(NotFoundException);
+
+        expect((await sessions.findOwn(owner.id, foreign.id)).title).toBe('mine');
+      });
+    });
+
     describe('appendMessage', () => {
       it('stores the message verbatim with its tool calls and moves last_message_at forward', async () => {
         const user = await seedUser(ctx.prisma);
@@ -280,6 +327,18 @@ describe('chat integration', () => {
         expect(page2).toMatchObject({ total: 3, page: 2, pageSize: 2 });
       });
 
+      it('includes the character summary, or null once the character is gone', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await seedCharacter(ctx.prisma, { name: 'Mari', voiceId: 'v9' });
+        await makeSession(user.id, { characterId: character.id, lastMessageAt: new Date(BASE + 1000) });
+        await makeSession(user.id, { lastMessageAt: new Date(BASE) });
+
+        const { items } = await sessions.listSessions(user.id);
+
+        expect(items[0].character).toEqual({ id: character.id, name: 'Mari', voiceId: 'v9' });
+        expect(items[1].character).toBeNull();
+      });
+
       it('returns an empty list for a user without sessions', async () => {
         const user = await seedUser(ctx.prisma);
 
@@ -434,6 +493,22 @@ describe('chat integration', () => {
         );
         expect(stored).toHaveLength(2);
         expect(stored.find((m) => m.role === 'MODEL')!.toolCalls).toBeNull();
+      });
+
+      it('titles an untitled session from its first message and keeps an existing title', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        const untitled = await sessions.createForCharacter(user.id, character.id);
+        ctx.llm.script.push(chunkBySize(replyJson('Hi', 'jp'), 18));
+
+        await stream(user.id, { message: 'm'.repeat(100), sessionId: untitled.id });
+
+        expect((await sessions.findOwn(user.id, untitled.id)).title).toBe('m'.repeat(80));
+        ctx.llm.script.push(chunkBySize(replyJson('Hi', 'jp'), 18));
+
+        await stream(user.id, { message: 'second', sessionId: untitled.id });
+
+        expect((await sessions.findOwn(user.id, untitled.id)).title).toBe('m'.repeat(80));
       });
 
       it('rejects a new session without characterId with 400 and creates nothing', async () => {

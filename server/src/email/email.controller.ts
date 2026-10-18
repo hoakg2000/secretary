@@ -71,11 +71,22 @@ export class EmailController {
   // EMAIL LOGS
   // ==========================================
 
-  @ApiOperation({ summary: 'Danh sách email log, mới nhất trước' })
+  @ApiOperation({
+    summary: 'Danh sách email log, mới nhất trước (không kèm rawBody)',
+  })
   @Get('email/logs')
   @ResponseMessage('Lấy danh sách email log thành công')
   listLogs(@Query() dto: ListEmailLogDto) {
     return this.emailService.listLogs(dto);
+  }
+
+  @ApiOperation({ summary: 'Chi tiết một email log (kèm rawBody)' })
+  @ApiResponse({ status: 200, description: 'Lấy email log thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy email log' })
+  @Get('email/logs/:id')
+  @ResponseMessage('Lấy chi tiết email log thành công')
+  findLog(@Param('id') id: string) {
+    return this.emailService.findLog(id);
   }
 
   @ApiOperation({ summary: 'Xử lý lại một email ở trạng thái FAILED' })
@@ -99,6 +110,7 @@ export class EmailController {
   @ApiOperation({
     summary:
       'Webhook Google Pub/Sub push của Gmail. Không dùng JWT của ứng dụng: xác thực bằng ID token do Google ký',
+    security: [], // ghi đè Bearer của controller
   })
   @ApiResponse({ status: 200, description: 'Đã nạp xong các email mới' })
   @ApiResponse({
@@ -126,6 +138,7 @@ export class EmailController {
   // ==========================================
 
   @ApiOperation({ summary: 'Tạo mới quy tắc lọc Email' })
+  @ApiResponse({ status: 400, description: 'Regex không hợp lệ hoặc dữ liệu sai' })
   @Post('email-rules')
   @HttpCode(HttpStatus.CREATED)
   @ResponseMessage('Tạo quy tắc lọc email thành công')
@@ -145,6 +158,7 @@ export class EmailController {
   }
 
   @ApiOperation({ summary: 'Lấy thông tin chi tiết một quy tắc lọc Email' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy quy tắc lọc email' })
   @Get('email-rules/:id')
   @ResponseMessage('Lấy thông tin quy tắc thành công')
   findOneRule(@Param('id') id: string) {
@@ -152,6 +166,8 @@ export class EmailController {
   }
 
   @ApiOperation({ summary: 'Cập nhật quy tắc lọc Email' })
+  @ApiResponse({ status: 400, description: 'Regex không hợp lệ hoặc dữ liệu sai' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy quy tắc lọc email' })
   @Patch('email-rules/:id')
   @ResponseMessage('Cập nhật quy tắc lọc email thành công')
   updateRule(@Param('id') id: string, @Body() dto: UpdateEmailRuleDto) {
@@ -159,6 +175,7 @@ export class EmailController {
   }
 
   @ApiOperation({ summary: 'Xóa quy tắc lọc Email' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy quy tắc lọc email' })
   @Delete('email-rules/:id')
   @ResponseMessage('Xóa quy tắc lọc email thành công')
   async removeRule(@Param('id') id: string) {

@@ -260,9 +260,26 @@ export class AuthService {
     });
   }
 
+  async getGoogleStatus(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { googleRefreshToken: true },
+    });
+    return { connected: !!user?.googleRefreshToken };
+  }
+
+  disconnectGoogle(userId: string) {
+    return this.googleClientFactory.disconnect(userId);
+  }
+
+  /** Lỗi 400 của callback kèm `reason` để controller đổi thành mã trên URL redirect */
+  private callbackError(message: string, reason: string) {
+    return new BadRequestException({ message, reason });
+  }
+
   async handleGoogleCallback(code?: string, state?: string) {
     if (!code) {
-      throw new BadRequestException('Mã xác thực (code) không hợp lệ');
+      throw this.callbackError('Mã xác thực (code) không hợp lệ', 'missing_code');
     }
 
     // 1. Xác minh state: phải do server ký cho đúng mục đích OAuth
@@ -274,8 +291,9 @@ export class AuthService {
       }
       userId = payload.sub;
     } catch {
-      throw new BadRequestException(
+      throw this.callbackError(
         'Tham số state không hợp lệ hoặc đã hết hạn',
+        'invalid_state',
       );
     }
 
@@ -285,7 +303,10 @@ export class AuthService {
       .getToken(code);
 
     if (!tokens.access_token) {
-      throw new BadRequestException('Không thể lấy Access Token từ Google');
+      throw this.callbackError(
+        'Không thể lấy Access Token từ Google',
+        'no_token',
+      );
     }
 
     // 3. Mã hóa và lưu Google tokens vào bảng users

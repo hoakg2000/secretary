@@ -47,7 +47,7 @@ export class EnvironmentVariables {
   JWT_REFRESH_EXPIRES_IN: string = '7d';
 
   @IsString()
-  CLIENT_URL: string = 'http://localhost:3000';
+  CLIENT_URL: string = 'http://localhost:3001';
 
   // ---- Optional, feature-gated ----
   @IsOptional()

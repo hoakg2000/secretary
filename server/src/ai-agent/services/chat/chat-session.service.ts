@@ -17,10 +17,48 @@ const HISTORY_LIMIT = 20;
 export class ChatSessionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Tạo phiên mới; tiêu đề lấy từ đầu tin nhắn đầu tiên */
-  create(userId: string, characterId: string | null, title: string) {
+  /** Tạo phiên mới; tiêu đề lấy từ đầu tin nhắn đầu tiên (null: đặt khi có tin nhắn đầu) */
+  create(userId: string, characterId: string | null, title: string | null) {
     return this.prisma.chatSession.create({
-      data: { userId, characterId, title: title.slice(0, SESSION_TITLE_MAX) },
+      data: {
+        userId,
+        characterId,
+        title: title?.slice(0, SESSION_TITLE_MAX) ?? null,
+      },
+    });
+  }
+
+  /** Tạo phiên rỗng cho một Character; 404 nếu Character không tồn tại */
+  async createForCharacter(
+    userId: string,
+    characterId: string,
+    title?: string,
+  ) {
+    const character = await this.prisma.character.findUnique({
+      where: { id: characterId },
+    });
+    if (!character) {
+      throw new NotFoundException(
+        `Không tìm thấy Character với ID: ${characterId}`,
+      );
+    }
+    return this.create(userId, characterId, title ?? null);
+  }
+
+  /** Đổi tiêu đề phiên của user; 404 nếu không có hoặc của người khác */
+  async rename(userId: string, sessionId: string, title: string) {
+    await this.findOwn(userId, sessionId);
+    return this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { title },
+    });
+  }
+
+  /** Phiên chưa có tiêu đề lấy tiêu đề từ tin nhắn đầu tiên (không ghi đè tiêu đề đã có) */
+  setTitleIfEmpty(sessionId: string, message: string) {
+    return this.prisma.chatSession.updateMany({
+      where: { id: sessionId, title: null },
+      data: { title: message.slice(0, SESSION_TITLE_MAX) },
     });
   }
 
@@ -101,6 +139,9 @@ export class ChatSessionService {
         this.prisma.chatSession.findMany({
           where,
           orderBy: { lastMessageAt: 'desc' },
+          include: {
+            character: { select: { id: true, name: true, voiceId: true } },
+          },
           ...range,
         }),
       () => this.prisma.chatSession.count({ where }),

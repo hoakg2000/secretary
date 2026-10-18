@@ -17,6 +17,8 @@ export function createGoogleSpies() {
   const getToken = vi.fn();
   /** OAuth2.verifyIdToken: resolves an object with getPayload() */
   const verifyIdToken = vi.fn();
+  /** OAuth2.revokeToken: resolves when Google revoked the token */
+  const revokeToken = vi.fn();
 
   const handlers = [
     calendar.events.insert,
@@ -29,6 +31,7 @@ export function createGoogleSpies() {
     gmail.users.messages.get,
     getToken,
     verifyIdToken,
+    revokeToken,
   ];
 
   let installed: { mockRestore: () => void }[] = [];
@@ -38,6 +41,7 @@ export function createGoogleSpies() {
     gmail,
     getToken,
     verifyIdToken,
+    revokeToken,
     /** a verified ID token payload, for verifyIdToken.mockResolvedValue */
     ticket: (payload: Record<string, unknown>) => ({ getPayload: () => payload }),
     install() {
@@ -53,6 +57,7 @@ export function createGoogleSpies() {
         vi.spyOn(google, 'gmail').mockImplementation((() => gmail) as any),
         vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockImplementation(getToken as any),
         vi.spyOn(google.auth.OAuth2.prototype, 'verifyIdToken').mockImplementation(verifyIdToken as any),
+        vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockImplementation(revokeToken as any),
       ];
     },
     restore() {

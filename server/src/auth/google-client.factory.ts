@@ -77,6 +77,33 @@ export class GoogleClientFactory {
     return client;
   }
 
+  /**
+   * Ngắt kết nối Google: thu hồi token ở Google (best effort, lỗi chỉ ghi log) rồi xóa token trong DB.
+   * gmailHistoryId gắn với hộp thư đã kết nối nên xóa cùng: kết nối lại sẽ nạp lại từ đầu.
+   */
+  async disconnect(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const stored = user?.googleRefreshToken ?? user?.googleAccessToken;
+    if (stored) {
+      try {
+        await this.createOAuthClient().revokeToken(
+          decryptToken(stored, this.key),
+        );
+      } catch (error) {
+        this.logger.warn(`Không thu hồi được token tại Google: ${error}`);
+      }
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        googleAccessToken: null,
+        googleRefreshToken: null,
+        googleTokenExpiresAt: null,
+        gmailHistoryId: null,
+      },
+    });
+  }
+
   /** User đầu tiên đã kết nối Google cùng OAuth2 client của họ; null nếu chưa ai kết nối */
   async forConnectedUser() {
     const user = await this.prisma.user.findFirst({

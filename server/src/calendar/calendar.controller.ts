@@ -57,6 +57,7 @@ export class CalendarController {
     status: 201,
     description: 'Tạo sự kiện thành công',
   })
+  @ApiResponse({ status: 400, description: 'Giờ kết thúc phải sau giờ bắt đầu' })
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ResponseMessage('Tạo sự kiện lịch thành công')
@@ -100,6 +101,8 @@ export class CalendarController {
     status: 200,
     description: 'Cập nhật sự kiện lịch thành công',
   })
+  @ApiResponse({ status: 400, description: 'Giờ kết thúc phải sau giờ bắt đầu' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy sự kiện' })
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @ResponseMessage('Cập nhật sự kiện lịch thành công')
@@ -112,6 +115,7 @@ export class CalendarController {
     status: 200,
     description: 'Xóa sự kiện lịch thành công',
   })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy sự kiện' })
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @ResponseMessage('Xóa sự kiện lịch thành công')

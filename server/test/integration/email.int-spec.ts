@@ -438,6 +438,27 @@ describe('email integration (rules + ingest, queue paused so the worker never ta
       expect(page.items).toEqual([]);
       expect(page.total).toBe(5);
     });
+
+    it('leaves rawBody out of the list', async () => {
+      await ctx.prisma.emailLog.create({ data: { messageId: 'big', sender: 's', rawBody: 'secret body' } });
+
+      const page = await emails.listLogs({});
+
+      expect(page.items[0]).toMatchObject({ messageId: 'big' });
+      expect(page.items[0]).not.toHaveProperty('rawBody');
+    });
+  });
+
+  describe('findLog', () => {
+    it('returns the full row including rawBody', async () => {
+      const created = await ctx.prisma.emailLog.create({ data: { messageId: 'one', sender: 's', rawBody: 'full body' } });
+
+      expect(await emails.findLog(created.id)).toMatchObject({ id: created.id, rawBody: 'full body' });
+    });
+
+    it('returns 404 for an unknown id', async () => {
+      await expect(emails.findLog(MISSING)).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 
   describe('EmailTools.search_emails', () => {

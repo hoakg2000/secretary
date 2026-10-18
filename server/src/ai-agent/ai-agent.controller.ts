@@ -16,6 +16,7 @@ import {
 import {
   ApiBearerAuth,
   ApiOperation,
+  ApiProduces,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -28,8 +29,10 @@ import {
 } from '../common/decorators/current-user.decorator';
 import { ResponseMessage } from '../common/decorators/response-message.decorator';
 import { ChatStreamDto } from './dto/chat-stream.dto';
+import { CreateSessionDto } from './dto/create-session.dto';
 import { ListChatDto } from './dto/list-chat.dto';
 import { ListMemoryDto } from './dto/list-memory.dto';
+import { RenameSessionDto } from './dto/rename-session.dto';
 import { SaveMemoryDto } from './dto/save-memory.dto';
 import { SearchMemoryDto } from './dto/search-memory.dto';
 import { TtsRequestDto } from './dto/tts-request.dto';
@@ -101,8 +104,9 @@ export class AiAgentController {
   @ApiOperation({
     summary: 'Chat tương tác thời gian thực với AI Agent (SSE Stream qua POST)',
     description:
-      'Các frame `data:` là JSON có `type`: session | text | tool_call | tool_result | confirmation_required | reply | error | done. Frame đầu tiên luôn là `session` (chứa `sessionId`). Frame `text` chứa dần phần tiếng Việt (`content`). Frame `reply` (`messageId`, `contentJp`) được gửi sau khi lưu tin nhắn, ngay trước `done`; `contentJp` là bản tiếng Nhật dùng cho TTS (có thể null).',
+      'Các frame `data:` là JSON có `type`: session | text | tool_call | tool_result | confirmation_required | reply | error | done. Frame đầu tiên luôn là `session` (chứa `sessionId`). Frame `text` chứa dần phần tiếng Việt (`content`). Frame `reply` (`messageId`, `contentJp`) được gửi sau khi lưu tin nhắn, ngay trước `done`; `contentJp` là bản tiếng Nhật dùng cho TTS (có thể null). Trường theo từng loại: session{sessionId}, text{content}, tool_call{tool, args}, tool_result{tool, result}, confirmation_required{actionId, tool, args}, reply{messageId, contentJp}, error{message}, done{}.',
   })
+  @ApiProduces('text/event-stream')
   @ApiResponse({
     status: 200,
     description: 'Bắt đầu luồng Server-Sent Events thành công',
@@ -126,7 +130,40 @@ export class AiAgentController {
   }
 
   @ApiOperation({
+    summary: 'Tạo phiên chat rỗng với một Character',
+    description:
+      'Phiên không có `title` sẽ lấy tiêu đề từ tin nhắn đầu tiên (80 ký tự đầu) khi gọi chat/stream với `sessionId`.',
+  })
+  @ApiResponse({ status: 201, description: 'Tạo phiên chat thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy Character' })
+  @Post('sessions')
+  @HttpCode(HttpStatus.CREATED)
+  @ResponseMessage('Tạo phiên chat thành công')
+  createSession(@CurrentUser() user: AuthUser, @Body() dto: CreateSessionDto) {
+    return this.chatSessionService.createForCharacter(
+      user.userId,
+      dto.characterId,
+      dto.title,
+    );
+  }
+
+  @ApiOperation({ summary: 'Đổi tiêu đề một phiên chat' })
+  @ApiResponse({ status: 200, description: 'Đổi tiêu đề thành công' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy phiên chat' })
+  @Patch('sessions/:id')
+  @ResponseMessage('Đổi tiêu đề phiên chat thành công')
+  renameSession(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: RenameSessionDto,
+  ) {
+    return this.chatSessionService.rename(user.userId, id, dto.title);
+  }
+
+  @ApiOperation({
     summary: 'Danh sách phiên chat (tin nhắn mới nhất trước, phân trang)',
+    description:
+      'Mỗi phiên kèm `character` ({id, name, voiceId}; null nếu Character đã bị xóa).',
   })
   @ApiResponse({ status: 200, description: 'Lấy danh sách thành công' })
   @Get('sessions')
@@ -174,6 +211,10 @@ export class AiAgentController {
   })
   @ApiResponse({ status: 200, description: 'Đã thực thi hành động' })
   @ApiResponse({
+    status: 400,
+    description: 'Tham số của hành động không hợp lệ (do dịch vụ đích từ chối)',
+  })
+  @ApiResponse({
     status: 404,
     description: 'Hành động không tồn tại, đã dùng hoặc đã hết hạn (5 phút)',
   })
@@ -205,7 +246,9 @@ export class AiAgentController {
       'Character của phiên chat chưa có voiceId, hoặc tin nhắn không có nội dung tiếng Nhật để đọc',
   })
   @ApiResponse({ status: 404, description: 'Không tìm thấy tin nhắn' })
+  @ApiResponse({ status: 500, description: 'Fish.audio trả lỗi' })
   @ApiResponse({ status: 503, description: 'Dịch vụ TTS chưa được cấu hình' })
+  @ApiProduces('audio/mpeg')
   @Post('tts')
   @HttpCode(HttpStatus.OK)
   async textToSpeech(

@@ -126,7 +126,16 @@ export class EmailService {
     );
   }
 
-  /** Danh sách email log, mới nhất trước */
+  /** Một email log đầy đủ (kèm rawBody); 404 nếu không có */
+  async findLog(id: string) {
+    const emailLog = await this.prisma.emailLog.findUnique({ where: { id } });
+    if (!emailLog) {
+      throw new NotFoundException(`Không tìm thấy email log với ID: ${id}`);
+    }
+    return emailLog;
+  }
+
+  /** Danh sách email log, mới nhất trước (không kèm rawBody: xem chi tiết qua findLog) */
   async listLogs(dto: ListEmailLogDto) {
     const where = { ...(dto.status && { status: dto.status }) };
 
@@ -135,6 +144,7 @@ export class EmailService {
       (range) =>
         this.prisma.emailLog.findMany({
           where,
+          omit: { rawBody: true },
           orderBy: { createdAt: 'desc' },
           ...range,
         }),

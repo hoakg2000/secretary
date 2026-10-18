@@ -34,7 +34,7 @@ export default defineConfig({
       GMAIL_PUBSUB_TOPIC: 'projects/test/topics/gmail',
       GOOGLE_REDIRECT_URI: 'http://localhost:3000/auth/google/callback',
       GEMINI_EMBEDDING_MODEL: 'test-embedding-model',
-      CLIENT_URL: 'http://localhost:3000',
+      CLIENT_URL: 'http://localhost:3001',
       NODE_ENV: 'test',
       PUBSUB_PUSH_AUDIENCE: 'https://test.local/email/gmail/push',
       PUBSUB_PUSH_SERVICE_ACCOUNT: 'pubsub-push@test.iam.gserviceaccount.com',

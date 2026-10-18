@@ -1,9 +1,12 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Post,
   Query,
   Req,
@@ -17,6 +20,7 @@ import {
   ApiOperation,
   ApiQuery,
   ApiResponse,
+  ApiTags,
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import {
@@ -33,8 +37,11 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 const REFRESH_COOKIE = 'refreshToken';
 const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
+@ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
@@ -86,6 +93,10 @@ export class AuthController {
       'Làm mới Access Token bằng Refresh Token (cookie hoặc body). Refresh Token được xoay vòng sau mỗi lần gọi',
   })
   @ApiResponse({
+    status: 200,
+    description: 'Làm mới thành công, Set-Cookie Refresh Token mới',
+  })
+  @ApiResponse({
     status: 401,
     description: 'Refresh Token không hợp lệ, hết hạn hoặc đã được sử dụng',
   })
@@ -117,6 +128,8 @@ export class AuthController {
   @ApiOperation({
     summary: 'Đăng xuất phiên hiện tại (hoặc một phiên khác của chính user)',
   })
+  @ApiResponse({ status: 200, description: 'Đăng xuất thành công' })
+  @ApiResponse({ status: 401, description: 'Chưa xác thực' })
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @ResponseMessage('Đăng xuất thành công')
@@ -186,21 +199,57 @@ export class AuthController {
     description: 'State do server ký khi tạo URL kết nối',
   })
   @ApiResponse({
-    status: 200,
-    description: 'Kết nối và lưu Token Google thành công',
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'code/state không hợp lệ hoặc lấy token thất bại',
+    status: 302,
+    description:
+      'Chuyển hướng về `${CLIENT_URL}/settings?google=connected`, hoặc `?google=error&reason=<missing_code|invalid_state|no_token|exchange_failed>` khi lỗi',
   })
   // Google redirect trình duyệt về đây, không có Bearer token: xác thực bằng state đã ký
   @Public()
   @Get('google/callback')
-  @ResponseMessage('Kết nối và lưu Token Google thành công')
-  handleGoogleCallback(
+  async handleGoogleCallback(
     @Query('code') code: string,
     @Query('state') state: string,
+    @Res() res: Response,
   ) {
-    return this.authService.handleGoogleCallback(code, state);
+    const settingsUrl = `${this.configService.getOrThrow<string>('CLIENT_URL')}/settings`;
+    try {
+      await this.authService.handleGoogleCallback(code, state);
+      return res.redirect(302, `${settingsUrl}?google=connected`);
+    } catch (error: any) {
+      const reason =
+        error instanceof BadRequestException
+          ? (error.getResponse() as { reason?: string }).reason
+          : undefined;
+      this.logger.warn(`Google callback thất bại: ${error?.message}`);
+      return res.redirect(
+        302,
+        `${settingsUrl}?google=error&reason=${reason ?? 'exchange_failed'}`,
+      );
+    }
+  }
+
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Trạng thái kết nối tài khoản Google' })
+  @ApiResponse({
+    status: 200,
+    description: 'Trả về `{ connected }`: true khi đã có Refresh Token',
+  })
+  @ApiResponse({ status: 401, description: 'Chưa xác thực' })
+  @Get('google/status')
+  @ResponseMessage('Lấy trạng thái kết nối Google thành công')
+  getGoogleStatus(@CurrentUser() user: AuthUser) {
+    return this.authService.getGoogleStatus(user.userId);
+  }
+
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Ngắt kết nối Google: thu hồi token tại Google và xóa token đã lưu',
+  })
+  @ApiResponse({ status: 200, description: 'Đã ngắt kết nối Google' })
+  @ApiResponse({ status: 401, description: 'Chưa xác thực' })
+  @Delete('google')
+  @ResponseMessage('Đã ngắt kết nối tài khoản Google')
+  async disconnectGoogle(@CurrentUser() user: AuthUser) {
+    await this.authService.disconnectGoogle(user.userId);
   }
 }
