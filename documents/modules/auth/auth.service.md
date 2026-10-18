@@ -6,7 +6,7 @@
 
 | Class | File (under `server/src/auth/`) | Role |
 |-------|---------------------------------|------|
-| `AuthService` | `auth.service.ts` | Login, refresh, logout, session, Google connect and callback. |
+| `AuthService` | `auth.service.ts` | Login, refresh, logout, session, Google connect, callback, status and disconnect. |
 | `JwtStrategy` | `strategies/jwt.strategy.ts` | Verifies an access token and checks its session row. |
 | `JwtAuthGuard` | `guards/jwt-auth.guard.ts` | Global guard; skips routes with `@Public()`. |
 | `GoogleClientFactory` | `google-client.factory.ts` | OAuth2 client per user, saves tokens, saves refreshed tokens. |
@@ -56,9 +56,22 @@ Not an AI tool in any method.
 
 ### 6. handleGoogleCallback(code?, state?)
 
-- 400 without `code`. Verifies `state` (signature, `typ: oauth_state`, `sub`); otherwise 400.
-- Exchanges `code` for tokens, 400 when there is no access token, then `GoogleClientFactory.saveTokens`.
+- Without `code`: `BadRequestException` with `reason: 'missing_code'`. Verifies `state` (signature, `typ: oauth_state`,
+  `sub`); otherwise `BadRequestException` with `reason: 'invalid_state'`.
+- Exchanges `code` for tokens; no access token → `BadRequestException` with `reason: 'no_token'`. Then
+  `GoogleClientFactory.saveTokens`.
+- The controller turns any error into a redirect (`reason` of the 400, else `exchange_failed`).
 - **Tables**: `users` (update).
+
+### 7. getGoogleStatus(userId)
+
+- Returns `{ connected }`: `true` when `users.google_refresh_token` is set.
+- **Tables**: `users` (read).
+
+### 8. disconnectGoogle(userId)
+
+- Calls `GoogleClientFactory.disconnect(userId)`.
+- **Tables**: `users` (read, update).
 
 ---
 
@@ -73,5 +86,8 @@ that ID whose `user_id` equals `sub` and whose user is active. Returns `{ userId
 - `saveTokens(userId, tokens)`: encrypts access and refresh tokens with AES-256-GCM (`TOKEN_ENCRYPTION_KEY`,
   `server/src/common/crypto/token-cipher.ts`, format `v1:<iv>:<tag>:<ciphertext>`) and writes them with
   `google_token_expires_at` to `users`. Absent values are left unchanged.
+- `disconnect(userId)`: revokes the stored refresh (else access) token at Google, best effort (a failure is logged),
+  then sets the three Google token columns and `gmail_history_id` to null. The history ID belongs to the connected
+  mailbox, so a reconnect starts fresh.
 - `forUser(userId)`: decrypts the stored tokens and returns an OAuth2 client, or `null` when Google is not
   connected. Tokens refreshed by Google are saved back. Used by the calendar sync and the Gmail push service.

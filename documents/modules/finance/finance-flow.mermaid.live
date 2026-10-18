@@ -3,7 +3,7 @@ flowchart TD
     subgraph Clients["Callers"]
         Client["Client (JWT)"]
         Worker["EmailProcessor (email classified as TRANSACTION)"]
-        AiEngine["Gemini function calling (AgentService)"]
+        AiEngine["LLM function calling (AgentService)"]
     end
 
     subgraph ControllerLayer["FinanceController /api/v1/finance"]

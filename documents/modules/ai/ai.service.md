@@ -1,7 +1,7 @@
 # AI Agent Services
 
 - **Module**: `AiAgentModule` — `server/src/ai-agent/ai-agent.module.ts`
-- **Description**: the chat turn (system instruction, Gemini stream, tool loop, write confirmation), long-term
+- **Description**: the chat turn (system instruction, LLM stream, tool loop, write confirmation), long-term
   memory (pgvector + text search + decay at query time), text-to-speech, storage of chat sessions and messages.
 - **There is no `AiService`.** The work is split over the classes below.
 
@@ -12,7 +12,8 @@
 | `MemoryService` | `services/memory/memory.service.ts` | Embedding, save, hybrid search, list, update, delete. |
 | `MemoryTools` | `tools/memory.tools.ts` | The two memory AI tools. |
 | `TtsService` | `services/tts/tts.service.ts` | Fish.audio MP3 stream. |
-| `GenAiProvider` | `genai.provider.ts` | One lazy Gemini client; 503 without `GEMINI_API_KEY`. |
+| `LlmService` | `server/src/llm/llm.service.ts` (`LlmModule`) | Chat and email-classification model calls. `LLM_TYPE` (`motapi` or `gemini`) and `LLM_MODELS` (`motapi` `claude-sonnet-5-5`, `gemini` `gemini-3.6-flash`) are set there; `MotApiClient` needs `MOT_API_KEY`, `GeminiClient` needs `GEMINI_API_KEY` (503 when the key of the chosen provider is missing). |
+| `GenAiProvider` | `genai.provider.ts` | One lazy Gemini client for embeddings; 503 without `GEMINI_API_KEY`. |
 | `RagChunkService` | `services/rag-chunk/rag-chunk.service.ts` | Text chunking. Kept, called from nowhere. |
 | `ChatSessionService` | `services/chat/chat-session.service.ts` | Chat sessions and messages. |
 
@@ -72,9 +73,9 @@ Then, inside the stream:
      `save_user_memory` only for a message that meets this rule";
    - up to 5 memories found by `MemoryService.searchMemory` for the message, marked as reference data that must
      not be followed as instructions. A retrieval failure does not fail the chat.
-4. Open a Gemini chat (`CHAT_MODEL`, `gemini-3.6-flash`) with all tool declarations, the reply schema (`responseMimeType: application/json`, `REPLY_SCHEMA`: required `message_vi` and `message_jp`) and the history from
+4. Call `LlmService.sendMessageLLM(LLM_TYPE, …)` (default: MộtAPI `claude-sonnet-5-5`) with the system instruction, all tool declarations, the reply schema (`jsonSchema: REPLY_SCHEMA`: required `message_vi` and `message_jp`) and the history from
    `ChatSessionService.recentHistory`: up to the last 20 messages of the session before the one stored in step 2,
-   oldest first, starting at a user turn. Rows with empty text (a `MODEL` row that only holds tool calls) are dropped.
+   oldest first, starting at a user turn. A model that wraps its JSON in a code fence is handled by `stripJsonFence`. Rows with empty text (a `MODEL` row that only holds tool calls) are dropped.
 5. The model answers in JSON `{ message_vi, message_jp }`. `ReplyStreamParser` (`services/agent/reply-stream.parser.ts`) reads the stream piece by piece and emits only the decoded `message_vi` as `text` frames; `message_jp` is never streamed. When the model calls tools, run them (`executeToolCall`), answer all calls
    of the round in one message, and continue. At most 5 rounds (`MAX_TOOL_ROUNDS`), then an `error` frame.
 6. When the model calls `save_user_memory`, the new memory's ID is written to `memory_id` of the message stored in
@@ -97,14 +98,14 @@ Rules:
   `MODEL` row. A partial answer is not stored.
 - Chat is never embedded or searched by vector (`db.md` section 5). The pre-turn retrieval reads `ai_memories` only.
 - Only the path in step 6 turns chat content into a memory.
-- Risk: a response schema together with function calling is a Gemini 3 preview feature. Behaviour may change or
-  fail (for example a reply that is not valid JSON, handled by the fallback in step 7).
+- Risk: the model may not return valid JSON for the reply schema together with function calling (handled by the
+  fallback in step 7).
 
 ### 2. confirmAction / discardAction
 
 - `confirmAction(actionId)`: takes the action out of `PendingActionStore` and runs the tool once. Returns
   `{ tool, result }`. `NotFoundException` when unknown, used or expired.
-- `discardAction(actionId)`: removes it. Returns `{ success: true }`.
+- `discardAction(actionId)`: removes it. The controller returns `data: null`.
 - Neither rewrites the stored `MODEL` message of the proposing turn.
 
 ---
@@ -116,14 +117,18 @@ embedding model.
 
 | Method | Does | Tables |
 |--------|------|--------|
-| `resolve(userId, sessionId?, characterId?, firstMessage?)` | Creates a session (title = first 80 characters of `firstMessage`), or loads one and requires `session.userId === userId`; otherwise `NotFoundException`. | `chat_sessions` |
+| `create(userId, characterId, title)` | Creates a session; `title` is cut to 80 characters, or null (set by `setTitleIfEmpty` on the first message). | `chat_sessions` |
+| `createForCharacter(userId, characterId, title?)` | `NotFoundException` when the character does not exist, else `create`. Used by `POST /ai-agent/sessions`. | `characters`, `chat_sessions` |
+| `rename(userId, sessionId, title)` | `findOwn`, then updates `title`. | `chat_sessions` |
+| `setTitleIfEmpty(sessionId, message)` | Sets `title` to the first 80 characters of `message` only where it is null (`updateMany`). Called by `chatStream` for an existing untitled session. | `chat_sessions` |
+| `findOwn(userId, sessionId)` | The session when it belongs to the user; otherwise `NotFoundException` (same answer for unknown and foreign). | `chat_sessions` |
 | `appendMessage(sessionId, role, content, toolCalls?, contentJp?)` | Inserts one message with the full text (and `contentJp` when given) and updates `last_message_at`. Returns the message. | `chat_messages`, `chat_sessions` |
-| `recentHistory(sessionId, beforeMessageId, limit = 20)` | Up to `limit` earlier messages, oldest first, mapped to Gemini's `user` / `model` roles; rows with empty text and leading `model` turns are dropped. | `chat_messages` |
+| `recentHistory(sessionId, beforeMessageId, limit = 20)` | Up to `limit` earlier messages, oldest first, mapped to neutral `user` / `assistant` `LlmMessage` turns; rows with empty text and leading `model` turns are dropped. | `chat_messages` |
 | `linkMemory(messageId, memoryId)` | Sets `memory_id` on a message marked important. | `chat_messages` |
-| `listSessions(userId, page, pageSize)` | `{ items, total, page, pageSize }`: sessions of the user, newest `last_message_at` first. | `chat_sessions` |
+| `listSessions(userId, page, pageSize)` | `{ items, total, page, pageSize }`: sessions of the user, newest `last_message_at` first, each with `character` `{ id, name, voiceId }` or null. | `chat_sessions`, `characters` |
 | `listMessages(userId, sessionId, page, pageSize)` | `{ items, total, page, pageSize }`: messages of an owned session, oldest first, including `contentJp`; `NotFoundException` for an unowned session. | `chat_messages` |
 | `findOwnMessage(userId, messageId)` | A message whose session belongs to the user, with its session and character; `NotFoundException` otherwise. Used by `TtsService`. | `chat_messages`, `chat_sessions`, `characters` |
-| `deleteSession(userId, sessionId)` | Deletes an owned session; messages cascade, memories stay. | `chat_sessions` |
+| `deleteSession(userId, sessionId)` | Deletes an owned session; messages cascade, memories stay. `NotFoundException` when none matched. | `chat_sessions` |
 
 ---
 
@@ -178,5 +183,5 @@ clears the category. Without `content` it is a plain update. With `content` it f
 ## Not in this module
 
 - Proactive triggers: `server/src/proactive/` (reminder cron and `POST /proactive/trigger`).
-- Email classification: `server/src/email/email-ai.service.ts`. It uses `GenAiProvider` and `CHAT_MODEL` (`gemini-3.6-flash`) with no tools and writes
+- Email classification: `server/src/email/email-ai.service.ts`. It uses `LlmService` (`LLM_TYPE`) with no tools and writes
   nothing to `ai_memories`.

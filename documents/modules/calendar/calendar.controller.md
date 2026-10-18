@@ -23,10 +23,12 @@
 - **Request** `CreateEventDto`: `title`, `startTime`, `endTime` (dates) required; `description?`, `location?`,
   `attendees?` (array), `intent?`, `priorityStatus?`. `endTime` must be after `startTime`, else 400.
 
-### 3. List — `GET /api/v1/calendar?fromDate=&toDate=`
+### 3. List — `GET /api/v1/calendar?month=&year=`
 
-- **Handler**: `getEvents(query)`. **Query** `QueryCalendarDto`: `fromDate?`, `toDate?`. Events that overlap the range
-  (start at or before `toDate`, end at or after `fromDate`), ordered by start time, without soft-deleted rows.
+- **Handler**: `getEvents(query)`. **Query** `QueryCalendarDto`: `month?` (integer 1–12), `year?` (integer 2000–2100);
+  anything else is 400. A missing value defaults to the current month or year in `APP_TIMEZONE`. Returns the events that
+  overlap that whole month (start before the next month begins, end after the month begins), ordered by start time,
+  without soft-deleted rows. With `syncState`.
 
 ### 4. Get one — `GET /api/v1/calendar/:id`
 
@@ -40,6 +42,6 @@
 
 ### 6. Delete — `DELETE /api/v1/calendar/:id`
 
-- **Handler**: `deleteEvent(id)`. `data`: `{ success: true }`. An event already on Google is soft-deleted
+- **Handler**: `deleteEvent(id)`. `data` is `null`. An event already on Google is soft-deleted
   (`deleted_at`) and `DIRTY`; the next sync deletes it on Google and then removes the row. An event never pushed is
   deleted at once.

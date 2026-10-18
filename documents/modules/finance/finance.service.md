@@ -82,7 +82,7 @@
 |------|--------|--------------|------------|
 | `get_financial_summary` | `aiGetFinancialSummary()` | no | none. Returns `getTotalBalance()` and the active accounts. |
 | `create_financial_transaction` | `aiCreateTransaction(dto)` | **yes** | `AiCreateTransactionDto`: `accountId`, `amount`, `type` (`INCOME` / `EXPENSE`), `categoryId?`, `counterparty?`, `note?`, `transactionTime?` (default now). `emailLogId` is not available to the model. |
-| `search_financial_transactions` | `aiSearchTransactions(dto)` | no | `FilterTransactionDto`: `accountId?`, `type?`, `startDate?`, `endDate?` (the model is not told about `categoryId`, `page`, `pageSize`). |
+| `search_financial_transactions` | `aiSearchTransactions(dto)` | no | `FilterTransactionDto`: `accountId?`, `categoryId?`, `type?`, `startDate?`, `endDate?`, `page?` (default 1), `pageSize?` (default 20, max 100); all are declared to the model. |
 
 `create_financial_transaction` is parked in `PendingActionStore` and runs only after
 `POST /ai-agent/actions/:actionId/confirm`.

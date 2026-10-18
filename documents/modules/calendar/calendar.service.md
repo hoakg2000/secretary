@@ -24,7 +24,9 @@ Not an AI tool in any method (the tools call it).
 
 ### 2. getEvents(query)
 
-- Events with `deleted_at` null that overlap `[fromDate, toDate]` (either bound optional), ordered by `start_time`.
+- `month` (1–12) and `year`; a missing one is the current month or year in `APP_TIMEZONE`. Returns events with
+  `deleted_at` null that overlap that month (`start_time` < start of the next month and `end_time` > start of the
+  month, month boundaries in `APP_TIMEZONE`), ordered by `start_time`, with `syncState`.
 
 ### 3. getEventById(id)
 

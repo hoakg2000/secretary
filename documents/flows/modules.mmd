@@ -53,6 +53,7 @@ flowchart LR
     RagChunkService["RagChunkService: unused"]
     TtsService["TtsService"]
     GenAiProvider["GenAiProvider"]
+    LlmService["LlmService (LlmModule): MotApiClient, GeminiClient"]
   end
 
   subgraph ModProactive["ProactiveModule"]
@@ -65,6 +66,7 @@ flowchart LR
     Postgres[("Postgres + pgvector")]
     Queue[["Redis / BullMQ queue email-processing"]]
     Gemini(["Gemini"])
+    MotApi(["MộtAPI"])
     GmailApi(["Gmail API"])
     PubSub(["Google Pub/Sub"])
     GoogleCalendar(["Google Calendar API"])
@@ -89,11 +91,11 @@ flowchart LR
   AiAgentController --> AgentService
   AiAgentController --> MemoryService
   AiAgentController --> TtsService
-  AiAgentController -->|"list sessions, list messages, delete session"| ChatSessionService
+  AiAgentController -->|"create, rename, list sessions, list messages, delete session"| ChatSessionService
   AgentService --> PendingActionStore
   AgentService -->|"create or find session, store messages, history, link memory"| ChatSessionService
   AgentService -->|"pre-turn retrieval"| MemoryService
-  AgentService --> GenAiProvider
+  AgentService --> LlmService
   MemoryService -->|"embeddings"| GenAiProvider
   MemoryTools --> MemoryService
   RagChunkService --> MemoryService
@@ -104,7 +106,7 @@ flowchart LR
   GlobalGuard -->|"jwt strategy"| JwtStrategy
   GmailPushService -->|"GoogleClientFactory.forUser"| GoogleClientFactory
   CalendarSyncService -->|"GoogleClientFactory.forUser"| GoogleClientFactory
-  EmailAiService -->|"GenAiProvider.get"| GenAiProvider
+  EmailAiService -->|"LlmService.completeLLM"| LlmService
   EmailProcessor -->|"FinanceService.createTransaction"| FinanceService
   EmailProcessor -->|"CalendarService.createEvent"| CalendarService
   EmailProcessor -->|"ProactiveService.evaluateAndTrigger"| ProactiveService
@@ -121,7 +123,9 @@ flowchart LR
   ChatSessionService -->|"relational only, no vector, via PrismaService"| Postgres
   EmailService -->|"add job"| Queue
   Queue -->|"process job"| EmailProcessor
-  GenAiProvider -->|"chat, classification, embeddings"| Gemini
+  GenAiProvider -->|"embeddings"| Gemini
+  LlmService -->|"chat, classification (default)"| MotApi
+  LlmService -->|"chat, classification (alternative, via GenAiProvider)"| GenAiProvider
   GmailPushService -->|"watch, history.list, messages.get"| GmailApi
   GmailApi -->|"mailbox change notification"| PubSub
   PubSub -->|"POST /email/pubsub with Google ID token"| EmailController

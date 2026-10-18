@@ -4,7 +4,7 @@
 - **Base endpoint**: `/api/v1` (routes under `/email/...` and `/email-rules/...`)
 - **Auth**: global `JwtAuthGuard`. `POST /email/pubsub` is `@Public()` and is protected by a Google ID token instead.
 - **Response**: `{ statusCode, message, data }`.
-- **Description**: manual email ingest, the email log list and reprocess of a failed email, the Gmail Pub/Sub push
+- **Description**: manual email ingest, the email log list and detail and reprocess of a failed email, the Gmail Pub/Sub push
   receiver, and CRUD of email rules (blacklist / moneylist / whitelist).
 
 ---
@@ -27,8 +27,13 @@
 - **Handler**: `listLogs(dto)` → `EmailService.listLogs`. Returns 200.
 - **Query** `ListEmailLogDto`: `status?` (`EmailStatus`: `PENDING`, `PROCESSED`, `FAILED`, `SKIPPED`), `page?` (min 1,
   default 1), `pageSize?` (1–50, default 20).
-- **Response `data`**: `{ items, total, page, pageSize }`; newest `created_at` first. Items are full `email_logs`
-  rows, including `rawBody`.
+- **Response `data`**: `{ items, total, page, pageSize }`; newest `created_at` first. Items are `email_logs` rows
+  without `rawBody` (read one log for the body).
+
+### 2a. Get one email log — `GET /api/v1/email/logs/:id`
+
+- **Handler**: `findLog(id)` → `EmailService.findLog`. Returns 200 with the full `email_logs` row, including `rawBody`.
+  404 when the log does not exist.
 
 ### 3. Reprocess a failed email — `POST /api/v1/email/logs/:id/reprocess`
 

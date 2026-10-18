@@ -3,7 +3,8 @@ flowchart TB
     Client["Client"]
 
     subgraph External ["External services"]
-        Gemini["Google Gemini API: gemini-3.6-flash, gemini-embedding-001"]
+        Llm["LlmService: MotApi claude-sonnet-5-5 (default) or Gemini gemini-3.6-flash"]
+        Gemini["Google Gemini API: gemini-embedding-001"]
         Fish["Fish.audio API"]
     end
 
@@ -37,8 +38,8 @@ flowchart TB
     Agent -- "6. system_prompt, memory_rule of the session character" --> DbChar
     Agent -- "7. Pre-turn retrieval, up to 5 memories" --> MemSvc
     MemSvc -- "vector + text search" --> DbMemory
-    Agent -- "8. Prompt (default + character prompt), history, tool declarations, JSON reply schema" --> Gemini
-    Gemini -- "9. JSON chunks {message_vi, message_jp} and function calls" --> Agent
+    Agent -- "8. Prompt (default + character prompt), history, tool declarations, JSON reply schema" --> Llm
+    Llm -- "9. JSON chunks {message_vi, message_jp} and function calls" --> Agent
 
     %% Tool loop
     Agent -- "10a. Read tool: run, return result" --> OtherTools
@@ -63,7 +64,7 @@ flowchart TB
     Agent -- "take once" --> Pending
 
     %% Session routes
-    Client -- "GET /sessions, GET /sessions/:id/messages, DELETE /sessions/:id" --> Controller
+    Client -- "POST /sessions, PATCH /sessions/:id, GET /sessions, GET /sessions/:id/messages, DELETE /sessions/:id" --> Controller
     Controller --> ChatSvc
 
     %% Memory routes

@@ -45,8 +45,8 @@
 
 ### 7. Delete — `DELETE /api/v1/finance/accounts/:id`
 
-- **Handler**: `deleteBankAccount(id)`. No transactions → deleted, `{ success: true }`. Otherwise `isActive` is set to false and the
-  account is returned.
+- **Handler**: `deleteBankAccount(id)`. No transactions → deleted. Otherwise `isActive` is set to false and the row is
+  kept. Either way `data` is `null`; the message is "Xóa hoặc vô hiệu hóa tài khoản thành công".
 
 ## Categories
 
@@ -67,7 +67,7 @@
 
 ### 11. Delete — `DELETE /api/v1/finance/categories/:id`
 
-- 404 when missing. Transactions of the category keep existing with `category_id` set to null.
+- 404 when missing. Transactions of the category keep existing with `category_id` set to null. `data` is `null`.
 
 ## Transactions
 
@@ -108,4 +108,4 @@
 
 ### 17. Delete — `DELETE /api/v1/finance/transactions/:id`
 
-- Deletes the row and reverses its effect on the balance. `data`: `{ success: true }`.
+- Deletes the row and reverses its effect on the balance. `data` is `null`.

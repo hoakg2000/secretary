@@ -3,7 +3,7 @@
 - **File location**: `server/src/common/decorators/ai-tool.decorator.ts`
 - **Description**: metadata decorator that marks a service method as an **AI function tool**. At start-up
   `AgentService.onModuleInit` (`server/src/ai-agent/services/agent/agent.service.ts`) scans every provider with
-  `DiscoveryService`, collects the decorated methods, and declares them to Gemini for function calling. There is no
+  `DiscoveryService`, collects the decorated methods, and declares them to the model (`LlmService`) for function calling. There is no
   `AiToolRegistryService`.
 
 ---

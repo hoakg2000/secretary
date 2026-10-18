@@ -20,7 +20,7 @@ in section 3.
   - MoneyList and whitelist: select a more detailed prompt. Mail that matches no rule is still classified.
 - **Deduplication**: on `message_id` only; a duplicate that was already processed is ignored (one still `PENDING` is
   queued again).
-- **AI classification**: one Gemini call per queued email, no tools.
+- **AI classification**: one LLM call (`LlmService`) per queued email, no tools.
   - `TRANSACTION`: creates a transaction when exactly one active account matches the extracted account number
     and/or bank code (and the currency, when the model extracted one).
   - `EVENT`: creates a calendar event.
@@ -39,12 +39,12 @@ in section 3.
 
 ### C. Interactive chat and proactive AI agent
 
-- **Interactive chat**: SSE stream, Gemini function calling over finance, calendar, memory and
+- **Interactive chat**: SSE stream, LLM function calling over finance, calendar, memory and
   notification tools. Write tools are not run until the user confirms.
 - **Character configuration**: one `system_prompt` text per character (identity, tone, background,
   rules), added to the default prompt. Characters are loaded from `documents/characters/*.json` by `npm run seed`. There can be many characters; the client chooses one. A new chat session requires a `characterId` and
   keeps it; an existing session uses its stored character.
-- **Bilingual reply**: the model answers in JSON with a Vietnamese text (shown, streamed) and a Japanese text (stored, read by TTS). Model: `gemini-3.6-flash`.
+- **Bilingual reply**: the model answers in JSON with a Vietnamese text (shown, streamed) and a Japanese text (stored, read by TTS). Chat model: through `LlmService`, MộtAPI `claude-sonnet-5-5` by default; the provider is switched in `server/src/llm/llm.service.ts` (`LLM_TYPE`).
 - **Chat sessions and message storage**: every session and the full text of every message are stored
   in `chat_sessions` / `chat_messages`. The server supplies the history of a turn. Chat is not embedded and not
   searched by vector.
@@ -65,17 +65,17 @@ in section 3.
 - **Backend**: NestJS (TypeScript, modular), BullMQ, Prisma.
 - **Database**: PostgreSQL (relational + `pgvector` + `tsvector`), Redis (queue).
 - **External integrations**: Google APIs (Gmail, Calendar, Pub/Sub), Telegram Bot API, Fish.audio
-  TTS, Google Gemini (chat, classification, embeddings).
-- **Repository folders**: `server/` is the product. `web-client/` and `mobile-client/` are empty. Two
+  TTS, MộtAPI (chat and email classification by default), Google Gemini (embeddings; chat and classification when
+  `LLM_TYPE` is `gemini`).
+- **Web client**: `web-client/`, Next.js 16 (App Router), Vietnamese and English. Pages: login, chat, dashboard,
+  characters, emails, calendar, finance, memories, settings (Google connect and disconnect). It calls the API at
+  `NEXT_PUBLIC_API_URL`.
+- **Repository folders**: `server/` and `web-client/` are the product. `mobile-client/` is empty. Two
   prototypes sit outside the product and are not used by the server: `fish-tts-api/` (a standalone Express proxy,
   `POST /api/tts`, that calls Fish.audio with a fixed `MODEL_ID`) and `src/` (a static page `index.html` that calls
   that proxy on `localhost:3000`, a `requirements.txt` of Python voice libraries, and a sample `output_voice.wav`).
 
 ## 3. Not built
-
-### Planned
-
-- Web dashboard (Next.js, App Router) in `web-client/`.
 
 ### Dropped
 

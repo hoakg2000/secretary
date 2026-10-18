@@ -9,7 +9,7 @@ sequenceDiagram
     participant Svc as EmailService / EmailRuleService
     participant Queue as Redis / BullMQ (email-processing)
     participant Worker as EmailProcessor
-    participant Ai as EmailAiService (Gemini, no tools)
+    participant Ai as EmailAiService (LlmService, no tools)
     participant DB as PostgreSQL
 
     rect rgb(240, 248, 255)

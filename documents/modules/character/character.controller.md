@@ -36,4 +36,4 @@
 ### 5. Delete a character — `DELETE /api/v1/characters/:id`
 
 - **Handler**: `removeCharacter(id)`. `chat_sessions.character_id` is set to
-  null. 404 when missing. **Response `data`**: the deleted row.
+  null. 404 when missing. **Response `data`**: `null`.

@@ -5,7 +5,7 @@
 - **Auth**: every route needs the application JWT (global `JwtAuthGuard`).
 - **Response**: `{ statusCode, message, data }`, except the chat stream (SSE) and TTS (MP3 stream).
 - **Description**: streaming chat with the AI agent, confirmation of write actions the AI proposed, memory
-  management and search, text-to-speech, chat sessions and their stored messages.
+  management and search, text-to-speech, chat sessions (create, rename, list, delete) and their stored messages.
 
 ---
 
@@ -20,7 +20,8 @@
 #### Request — `ChatStreamDto`
 
 - `message` (`string`, required): the user's message.
-- `sessionId` (`string`, UUID, optional): the chat session to continue. Omitted → the server creates a session.
+- `sessionId` (`string`, UUID, optional): the chat session to continue (also one made by `POST /ai-agent/sessions`).
+  Omitted → the server creates a session. A continued session without a title gets one from this message.
 - `characterId` (`string`, UUID, optional in the DTO): the character to answer as. **Required when no `sessionId` is
   sent** (a new session): missing → 400, unknown → 404, both before the stream opens. A new session stores this
   character. With a `sessionId`, the session's stored character is used and `characterId` is ignored. When the stored
@@ -62,7 +63,7 @@ keeps the `USER` row and stores no `MODEL` row. Steps: `ai.service.md` (`chatStr
 ### 3. Discard a proposed action — `DELETE /api/v1/ai-agent/actions/:actionId`
 
 - **Handler**: `discardAction(actionId)` → `AgentService.discardAction`
-- **Response `data`**: `{ success: true }`. 404 as above.
+- **Response `data`**: `null`. 404 as above.
 
 Neither route rewrites the stored `MODEL` message of the turn that proposed the action.
 
@@ -107,7 +108,7 @@ Neither route rewrites the stored `MODEL` message of the turn that proposed the 
 - **Handler**: `listSessions(req.user.userId, dto.page, dto.pageSize)` → `ChatSessionService.listSessions`
 - **Query** `ListChatDto`: `page?` (min 1, default 1), `pageSize?` (1–50, default 20).
 - **Response `data`**: `{ items, total, page, pageSize }`; sessions of the JWT user, newest `lastMessageAt` first: full rows: `id`, `userId`, `title`, `characterId`,
-  `lastMessageAt`, `createdAt`, `updatedAt`.
+  `lastMessageAt`, `createdAt`, `updatedAt`, plus `character`: `{ id, name, voiceId }`, or `null` when the character was deleted.
 
 ### 10. Read the messages of a session — `GET /api/v1/ai-agent/sessions/:id/messages`
 
@@ -120,8 +121,22 @@ Neither route rewrites the stored `MODEL` message of the turn that proposed the 
 ### 11. Delete a chat session — `DELETE /api/v1/ai-agent/sessions/:id`
 
 - **Handler**: `deleteSession(req.user.userId, id)` → `ChatSessionService.deleteSession`
-- Deletes the session and its messages. Memories made from those messages are kept. **Response `data`**: `{ success: true }`.
+- Deletes the session and its messages. Memories made from those messages are kept. **Response `data`**: `null`.
 - 404 as above.
+
+### 11a. Create an empty chat session — `POST /api/v1/ai-agent/sessions`
+
+- **Handler**: `createSession(req.user.userId, dto)` → `ChatSessionService.createForCharacter`. Returns 201.
+- **Request** `CreateSessionDto`: `characterId` (UUID, required), `title?` (non-empty string, max 120; stored cut to 80 characters).
+- **Response `data`**: the new `chat_sessions` row. 404 when the character does not exist.
+- A session without a `title` gets one from its first message: when `chat/stream` runs with this `sessionId`, the first
+  80 characters of the message are stored (an existing title is never overwritten).
+
+### 11b. Rename a chat session — `PATCH /api/v1/ai-agent/sessions/:id`
+
+- **Handler**: `renameSession(req.user.userId, id, dto)` → `ChatSessionService.rename`. Returns 200.
+- **Request** `RenameSessionDto`: `title` (non-empty string, max 120, required).
+- **Response `data`**: the updated row. 404 when the session does not exist or belongs to another user.
 
 ---
 

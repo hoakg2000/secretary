@@ -19,11 +19,10 @@ Validated at startup by `server/src/config/env.validation.ts`. Template: `server
 | `NODE_ENV` | `development` | `production` sets the `Secure` flag on the refresh cookie |
 | `JWT_EXPIRES_IN` | `15m` | Access token lifetime |
 | `JWT_REFRESH_EXPIRES_IN` | `7d` | Refresh token lifetime; also the cookie and database expiry |
-| `CLIENT_URL` | `http://localhost:3000` | CORS origin |
+| `CLIENT_URL` | `http://localhost:3001` | CORS origin, and the base of the Google callback redirect (`CLIENT_URL/settings`) |
 
-`PORT` and `CLIENT_URL` both default to port 3000. `CLIENT_URL` is the browser origin of the dashboard, so a
-dashboard served on its own port needs `CLIENT_URL` set to that origin (for example `http://localhost:3001`), or the
-API needs another `PORT`. The code defaults are unchanged.
+`CLIENT_URL` is the browser origin of the web client (`web-client` runs on port 3001). Set it to the real origin when
+the client is served elsewhere.
 
 ## Optional, feature-gated
 
@@ -31,17 +30,26 @@ API needs another `PORT`. The code defaults are unchanged.
 |----------|---------|---------|
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | — | Google OAuth, calendar sync, Gmail push |
 | `TOKEN_ENCRYPTION_KEY` | — | AES-256-GCM key for Google tokens: 32 bytes, base64. **Required when `GOOGLE_CLIENT_ID` is set.** |
-| `GEMINI_API_KEY` | — | Chat, embeddings, email classification. Without it, `POST /ai-agent/memories` and `POST /ai-agent/memories/search` answer 503; the chat stream answers 200 and ends with an `error` frame (the session and the user's message are still stored); queued emails fail and end as `FAILED`. The server still starts. |
+| `MOT_API_KEY` | — | MộtAPI key. Chat and email classification use it while `LLM_TYPE` in `server/src/llm/llm.service.ts` is `motapi` (the default). Without it, the chat stream answers 200 and ends with an `error` frame (the session and the user's message are still stored); queued emails fail and end as `FAILED`. The server still starts. |
+| `GEMINI_API_KEY` | — | Embeddings (memories). Also chat and email classification when `LLM_TYPE` is `gemini`. Without it, `POST /ai-agent/memories` and `POST /ai-agent/memories/search` answer 503 (and the chat and email behavior above applies when `LLM_TYPE` is `gemini`). The server still starts. |
 | `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Must return 1536 dimensions (`outputDimensionality`) |
 | `FISH_AUDIO_API_KEY` | — | TTS. Without it `POST /ai-agent/tts` answers 503. The voice comes from `characters.voice_id`. |
 | `BULLMQ_CONCURRENCY` | `3` | Email worker concurrency |
 | `CALENDAR_SYNC_CRON` | every 5 minutes | Calendar push-sync schedule (cron expression, 5 or 6 fields, seconds first when 6; evaluated in the server's local time, not `APP_TIMEZONE`) |
-| `APP_TIMEZONE` | `Asia/Ho_Chi_Minh` | Reminder text, chat system instruction, email classification. Stored times are UTC. |
+| `APP_TIMEZONE` | `Asia/Ho_Chi_Minh` | Reminder text, chat system instruction, email classification, the month boundaries and default month of `GET /calendar`. Stored times are UTC. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | Telegram text delivery of proactive notifications. Without both, the dispatch status is `NOT_CONFIGURED` and nothing is sent. |
 | `TRUST_PROXY` | — | Set only behind a reverse proxy or tunnel, so that `req.ip` (recorded at login, key of the login throttle) is the real client address. A number is the count of proxies in front of the server (`1`); anything else is a list of trusted addresses or subnets (`loopback`, `10.0.0.0/8`). Unset: the socket address is used. `true` and `false` are refused at startup. |
 | `GMAIL_PUBSUB_TOPIC` | — | `projects/<project>/topics/<topic>`. Gmail watch target, renewed daily and at startup. |
 | `PUBSUB_PUSH_AUDIENCE` | — | Audience configured on the push subscription; checked on every push. |
 | `PUBSUB_PUSH_SERVICE_ACCOUNT` | — | Email of the push subscription's service account; checked on every push. Without all three Pub/Sub variables `POST /email/pubsub` answers 503. |
+
+## Web client
+
+Template: `web-client/.env.example`.
+
+| Variable | Default | Used by |
+|----------|---------|---------|
+| `NEXT_PUBLIC_API_URL` | `http://localhost:3000/api/v1` (in `.env.example`) | Base URL of the server API, read in the browser |
 
 ## Tests only
 

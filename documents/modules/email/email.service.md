@@ -9,7 +9,7 @@
 | `EmailService` | `email.service.ts` | Saves the `email_logs` row, classifies by rule, enqueues, lists logs, reprocesses a failed one. |
 | `EmailRuleService` | `email-rule.service.ts` | CRUD and matching of `email_rules`. |
 | `GmailPushService` | `gmail-push.service.ts` | Pub/Sub token check, Gmail watch, history pass. |
-| `EmailAiService` | `email-ai.service.ts` | One Gemini call per email, JSON answer, no tools. |
+| `EmailAiService` | `email-ai.service.ts` | One `LlmService` call per email, JSON answer, no tools. |
 | `EmailProcessor` | `email.processor.ts` | BullMQ consumer: see `email.worker.md`. |
 
 **Tables**: `email_logs`, `email_rules`, `users` (`gmail_history_id`, Google tokens). Written downstream by the
@@ -47,7 +47,12 @@ Not an AI tool in any method.
 ### 4. listLogs(dto)
 
 - `findMany` + `count` with an optional `status` filter, `created_at` descending, `page` default 1, `pageSize`
-  default 20 (max 50). Returns `{ items, total, page, pageSize }` with full rows, including `raw_body`.
+  default 20 (max 50). Returns `{ items, total, page, pageSize }` with rows that omit `raw_body` (`omit: { rawBody: true }`).
+- **Tables**: `email_logs` (read).
+
+### 4a. findLog(id)
+
+- `findUnique` by ID. Returns the full row, including `raw_body`. `NotFoundException` when missing.
 - **Tables**: `email_logs` (read).
 
 ### 5. reprocess(id)
@@ -99,8 +104,8 @@ Not an AI tool in any method.
 
 ## EmailAiService
 
-- `classify(email, ruleType)`: one `generateContent` call (`CHAT_MODEL`, `gemini-3.6-flash`) with a JSON response
-  schema and **no tools**. The email is the only untrusted input: it is wrapped between random-ID boundary lines, the
+- `classify(email, ruleType)`: one `LlmService.completeLLM(LLM_TYPE, …)` call (provider and model from
+  `server/src/llm/llm.service.ts`) with a JSON response schema and **no tools**. The email is the only untrusted input: it is wrapped between random-ID boundary lines, the
   body is cut at 20 000 characters, and the system instruction tells the model to describe, never follow, its content.
 - The rule type only selects the task text: `moneylist` (expect a bank notice), `whitelist` (important sender, judge
   `urgent`, prefer `EVENT` for invitations), no rule (model decides). `blacklist` never reaches it.

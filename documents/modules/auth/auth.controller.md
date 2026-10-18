@@ -4,9 +4,9 @@
 - **Base endpoint**: `/api/v1/auth`
 - **Auth**: global `JwtAuthGuard`; routes marked `@Public()` are open. The access token is checked against
   `user_sessions` on every request (`JwtStrategy`), so ending a session ends its access token.
-- **Response**: `{ statusCode, message, data }`.
-- **Description**: login of the master user, refresh-token rotation, logout, current session, Google OAuth2 connect
-  and callback (Gmail and Calendar).
+- **Response**: `{ statusCode, message, data }`, except the Google callback (a 302 redirect).
+- **Description**: login of the master user, refresh-token rotation, logout, current session, Google OAuth2 connect,
+  callback, status and disconnect (Gmail and Calendar).
 
 ---
 
@@ -38,7 +38,7 @@
 - **Auth**: JWT.
 - **Request** `LogoutDto`: `sessionId?` (UUID). Omitted → the current session. Another session is accepted only
   when it belongs to the same user.
-- Clears the cookie only when the current session ends. Response has no `data`.
+- Clears the cookie only when the current session ends. `data` is `null`.
 
 ### 4. Current session — `GET /api/v1/auth/session`
 
@@ -57,8 +57,22 @@
 
 ### 6. Google callback — `GET /api/v1/auth/google/callback`
 
-- **Handler**: `handleGoogleCallback(code, state)` → `AuthService.handleGoogleCallback`
+- **Handler**: `handleGoogleCallback(code, state, res)` → `AuthService.handleGoogleCallback`
 - **Auth**: `@Public()` (Google redirects the browser here; the signed `state` is the proof).
 - **Query**: `code`, `state` (both required).
-- **Response `data`**: `{ success: true }`. Tokens are stored encrypted.
-- 400 for a missing `code`, an invalid, expired or wrong-type `state`, or when Google returns no access token.
+- **Response**: never JSON. Always a 302 to `CLIENT_URL/settings`: `?google=connected` after the tokens are stored
+  encrypted, else `?google=error&reason=<reason>` with `missing_code`, `invalid_state`, `no_token` (Google returned
+  no access token) or `exchange_failed` (any other failure, such as a rejected code).
+
+### 7. Google status — `GET /api/v1/auth/google/status`
+
+- **Handler**: `getGoogleStatus(req)` → `AuthService.getGoogleStatus`
+- **Auth**: JWT.
+- **Response `data`**: `{ connected }`, `true` when the user has a stored Google refresh token.
+
+### 8. Google disconnect — `DELETE /api/v1/auth/google`
+
+- **Handler**: `disconnectGoogle(req)` → `AuthService.disconnectGoogle` → `GoogleClientFactory.disconnect`
+- **Auth**: JWT.
+- Revokes the token at Google (best effort: a failure is only logged), then clears the stored Google tokens, their
+  expiry and `gmail_history_id`. `data` is `null`.
