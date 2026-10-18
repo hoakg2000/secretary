@@ -76,6 +76,9 @@ const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className={MARKDOWN_CLASS}>
       <ReactMarkdown
+        // remote images would leak data to a third party (e.g. via a prompt-injected email)
+        disallowedElements={["img"]}
+        unwrapDisallowed
         components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a> }}
       >
         {children}

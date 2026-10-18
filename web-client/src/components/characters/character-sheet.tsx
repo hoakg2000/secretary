@@ -22,7 +22,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { createCharacter, updateCharacter } from "@/lib/api/endpoints/characters";
 import type { Character } from "@/lib/api/types";
-import { CHARACTERS_KEY } from "@/lib/chat/queries";
+import { CHARACTERS_KEY, SESSIONS_KEY } from "@/lib/chat/queries";
 import { emptyCharacterForm, toCreateInput, toPatch, type CharacterFormValues } from "@/lib/characters/payload";
 
 const MEMORY_MAX = 2000;
@@ -74,6 +74,7 @@ export function CharacterSheet({
       character ? updateCharacter(character.id, toPatch(v, character)) : createCharacter(toCreateInput(v)),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: CHARACTERS_KEY });
+      void queryClient.invalidateQueries({ queryKey: SESSIONS_KEY }); // sessions embed the character
       toast.success(t(character ? "saved" : "created"));
       onOpenChange(false);
     },

@@ -10,6 +10,9 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePathname } from "@/i18n/navigation";
 import { ApiError } from "@/lib/api/client";
+import { CALENDAR_KEY } from "@/lib/calendar/keys";
+import { FINANCE_KEY } from "@/lib/finance/keys";
+import { MEMORIES_KEY } from "@/lib/memories/keys";
 import { confirmAction, discardAction, streamChat } from "@/lib/api/endpoints/chat";
 import type { Character, ChatMessage } from "@/lib/api/types";
 import { mergeMessagePages, parseToolCalls } from "@/lib/chat/helpers";
@@ -44,11 +47,20 @@ export function ChatView() {
 
   // The stream may create the session; the URL is updated in place, so this ref is the source until pathname follows.
   const sessionRef = useRef<string | undefined>(pathId);
-  useEffect(() => {
-    sessionRef.current = pathId;
-  }, [pathId]);
   const abortRef = useRef<AbortController | null>(null);
   const counter = useRef(0);
+  const noRetry = useRef(new Set<string>()); // turns whose user text the server already stored
+  useEffect(() => {
+    // navigated elsewhere (not the session this stream just created): drop the old conversation state
+    if (pathId !== sessionRef.current) {
+      abortRef.current?.abort();
+      setLive([]);
+      setActions([]);
+      setChosen(null);
+    }
+    sessionRef.current = pathId;
+  }, [pathId]);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // ----- session + character -----
   const sessionsQ = useSessionsInfinite();
@@ -102,9 +114,10 @@ export function ChatView() {
   };
 
   // ----- streaming -----
-  const send = async (text: string, replaceKey?: string) => {
+  /** Resolves false only when the request was rejected before the stream opened (the text should be kept). */
+  const send = async (text: string, replaceKey?: string): Promise<boolean> => {
     const characterId = character?.id ?? chosen?.id;
-    if (!sessionRef.current && !characterId) return;
+    if (!sessionRef.current && !characterId) return false;
 
     const key = `t${++counter.current}`;
     const ac = new AbortController();
@@ -138,7 +151,10 @@ export function ChatView() {
         } else if (frame.type === "done") {
           break;
         } else {
-          if (frame.type === "error") failed = true;
+          if (frame.type === "error") {
+            failed = true;
+            noRetry.current.add(key);
+          }
           update((x) => applyFrame(x, frame));
         }
       }
@@ -146,14 +162,15 @@ export function ChatView() {
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         update((x) => ({ ...x, status: "stopped" }));
-        return;
+        return true;
       }
       failed = true;
       if (!opened && error instanceof ApiError && error.status >= 400 && error.status < 500) {
         toast.error(error.message);
         setLive((l) => l.filter((x) => x.key !== key));
-        return;
+        return false;
       }
+      if (opened) noRetry.current.add(key);
       update((x) => ({ ...x, status: "error", error: errorMessage(error, t("streamError")) }));
     } finally {
       if (abortRef.current === ac) {
@@ -162,14 +179,16 @@ export function ChatView() {
       }
     }
 
-    if (failed) return; // the error bubble stays so it can be retried
+    if (failed) return true; // the error bubble stays
     const id = sessionRef.current;
     void queryClient.invalidateQueries({ queryKey: SESSIONS_KEY });
     if (id) {
       // reset (not invalidate): page boundaries moved, so start again from the newest page
       await queryClient.resetQueries({ queryKey: messagesKey(id) });
     }
-    setLive((l) => l.filter((x) => x.status === "error"));
+    // drop only this send's turn; another turn may still be streaming
+    setLive((l) => l.filter((x) => x.key !== key || x.status === "error"));
+    return true;
   };
 
   const stop = () => abortRef.current?.abort();
@@ -182,6 +201,8 @@ export function ChatView() {
     try {
       const res = await confirmAction(a.actionId);
       patchAction(a.actionId, { state: "confirmed", result: res.result });
+      // the confirmed tool may have written to any of these
+      for (const queryKey of [CALENDAR_KEY, FINANCE_KEY, MEMORIES_KEY]) void queryClient.invalidateQueries({ queryKey });
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) patchAction(a.actionId, { state: "expired" });
       else patchAction(a.actionId, { state: "failed", result: errorMessage(error, t("confirmError")) });
@@ -322,7 +343,7 @@ export function ChatView() {
                   streaming={turn.status === "streaming"}
                   stopped={turn.status === "stopped"}
                   error={turn.status === "error" ? (turn.error ?? t("streamError")) : undefined}
-                  onRetry={turn.status === "error" && !streaming ? () => void send(turn.userText, turn.key) : undefined}
+                  onRetry={turn.status === "error" && !streaming && !noRetry.current.has(turn.key) ? () => void send(turn.userText, turn.key) : undefined}
                   tts={ttsFor(turn.messageId, turn.contentJp)}
                 />
               </div>
@@ -342,7 +363,7 @@ export function ChatView() {
 
         <div className="border-t p-3">
           {isNewChat && !chosen && <p className="mb-2 text-center text-xs text-muted-foreground">{t("chooseToType")}</p>}
-          <Composer streaming={streaming} disabled={isNewChat && !chosen && !live.length} onSend={(text) => void send(text)} onStop={stop} />
+          <Composer streaming={streaming} disabled={isNewChat && !chosen && !live.length} onSend={(text) => send(text)} onStop={stop} />
         </div>
       </section>
     </div>

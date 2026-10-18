@@ -66,15 +66,24 @@ async function toApiError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, message || res.statusText || `HTTP ${res.status}`, body);
 }
 
-/** One shared refresh for all parallel 401s. Resolves to the new token, or null when the session is gone. */
+async function doRefresh(): Promise<string | null> {
+  const res = await fetch(buildUrl("/auth/refresh"), { method: "POST", credentials: "include" });
+  if (!res.ok) return null;
+  const envelope = (await res.json()) as ApiEnvelope<{ accessToken: string }>;
+  accessToken = envelope.data.accessToken;
+  return accessToken;
+}
+
+/**
+ * One shared refresh for all parallel 401s. Resolves to the new token, or null when the session is gone.
+ * The Web Lock serializes tabs: the server drops the session when a refresh token is reused.
+ */
 export function refreshAccessToken(): Promise<string | null> {
   refreshPromise ??= (async () => {
     try {
-      const res = await fetch(buildUrl("/auth/refresh"), { method: "POST", credentials: "include" });
-      if (!res.ok) return null;
-      const envelope = (await res.json()) as ApiEnvelope<{ accessToken: string }>;
-      accessToken = envelope.data.accessToken;
-      return accessToken;
+      return typeof navigator !== "undefined" && navigator.locks
+        ? await navigator.locks.request("auth-refresh", doRefresh)
+        : await doRefresh();
     } catch {
       return null;
     } finally {

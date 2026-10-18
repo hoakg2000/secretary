@@ -88,9 +88,13 @@ export function RuleDialog({
         matcher: v.matcher,
         matchValue: v.matchValue.trim(),
         isActive: v.isActive,
-        ...(v.description.trim() && { description: v.description.trim() }),
       };
-      return rule ? updateEmailRule(rule.id, input) : createEmailRule(input);
+      const description = v.description.trim();
+      if (rule) {
+        // null clears a description that had a value
+        return updateEmailRule(rule.id, { ...input, description: description || (rule.description ? null : undefined) });
+      }
+      return createEmailRule({ ...input, ...(description && { description }) });
     },
     onSuccess: () => {
       toast.success(t(rule ? "ruleSaved" : "ruleCreated"));

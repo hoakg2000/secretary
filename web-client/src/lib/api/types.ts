@@ -345,9 +345,11 @@ export interface TransactionInput {
   emailLogId?: Id;
 }
 
-/** `emailLogId` cannot change; `categoryId: null` removes the category. */
-export type TransactionUpdate = Partial<Omit<TransactionInput, "emailLogId" | "categoryId">> & {
+/** `emailLogId` cannot change; `null` clears the category, counterparty or note. */
+export type TransactionUpdate = Partial<Omit<TransactionInput, "emailLogId" | "categoryId" | "counterparty" | "note">> & {
   categoryId?: Id | null;
+  counterparty?: string | null;
+  note?: string | null;
 };
 
 export interface TransactionFilter extends PageQuery {

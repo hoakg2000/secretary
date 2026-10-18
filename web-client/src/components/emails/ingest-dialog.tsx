@@ -21,7 +21,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ingestEmail } from "@/lib/api/endpoints/email";
+import { CALENDAR_KEY } from "@/lib/calendar/keys";
 import { EMAIL_LOGS_KEY } from "@/lib/emails/keys";
+import { FINANCE_KEY } from "@/lib/finance/keys";
 
 interface Values {
   messageId: string;
@@ -70,6 +72,8 @@ export function IngestDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       if (log) toast.success(t("ingested", { status: t(`status.${log.status}`) }));
       else toast.info(t("ingestDuplicate"));
       void queryClient.invalidateQueries({ queryKey: EMAIL_LOGS_KEY });
+      void queryClient.invalidateQueries({ queryKey: FINANCE_KEY });
+      void queryClient.invalidateQueries({ queryKey: CALENDAR_KEY });
       onOpenChange(false);
     },
     onError: (e) => toast.error(errorMessage(e, t("ingestError"))),

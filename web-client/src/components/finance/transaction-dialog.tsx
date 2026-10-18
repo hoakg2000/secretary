@@ -121,12 +121,14 @@ export function TransactionDialog({
       };
       const categoryId = v.categoryId === NONE ? undefined : v.categoryId;
       if (transaction) {
-        // emptied text fields cannot be cleared by PATCH (no null on the server), so only non-empty values are sent
+        // the server accepts null to clear a text field; send it only when the field had a value and is now empty
+        // (undefined is dropped by JSON.stringify)
+        const text = (value: string, previous: string | null) => value.trim() || (previous ? null : undefined);
         return updateTransaction(transaction.id, {
           ...base,
           categoryId: categoryId ?? null,
-          ...(v.counterparty.trim() && { counterparty: v.counterparty.trim() }),
-          ...(v.note.trim() && { note: v.note.trim() }),
+          counterparty: text(v.counterparty, transaction.counterparty),
+          note: text(v.note, transaction.note),
         });
       }
       return createTransaction({

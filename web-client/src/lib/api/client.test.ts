@@ -90,6 +90,22 @@ describe("apiFetch", () => {
     expect(authLost).toHaveBeenCalledTimes(1);
   });
 
+  it("runs the refresh inside the auth-refresh Web Lock when available", async () => {
+    const request = vi.fn((_name: string, cb: () => Promise<unknown>) => cb());
+    vi.stubGlobal("navigator", { locks: { request } });
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) =>
+      url.endsWith("/auth/refresh")
+        ? refreshOk("new")
+        : new Headers(init.headers).get("Authorization") === "Bearer new"
+          ? ok(1)
+          : json(401, { statusCode: 401, message: "Unauthorized" }),
+    );
+    await apiFetch("/a");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][0]).toBe("auth-refresh");
+    expect(getAccessToken()).toBe("new");
+  });
+
   it("gives up when the retry is still 401", async () => {
     fetchMock.mockImplementation(async (url: string) =>
       url.endsWith("/auth/refresh") ? refreshOk("new") : json(401, { statusCode: 401, message: "Unauthorized" }),

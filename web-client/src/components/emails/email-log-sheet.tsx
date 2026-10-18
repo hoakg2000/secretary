@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getEmailLog, reprocessEmailLog } from "@/lib/api/endpoints/email";
+import { CALENDAR_KEY } from "@/lib/calendar/keys";
 import { EMAIL_LOGS_KEY, emailLogKey } from "@/lib/emails/keys";
+import { FINANCE_KEY } from "@/lib/finance/keys";
 import { formatDateTime } from "@/lib/format";
 import { EmailStatusBadge } from "./email-status-badge";
 
@@ -35,6 +37,9 @@ export function EmailLogSheet({ id, onClose }: { id: string | null; onClose: () 
       toast.success(t("reprocessed"));
       void queryClient.invalidateQueries({ queryKey: EMAIL_LOGS_KEY });
       void queryClient.invalidateQueries({ queryKey: emailLogKey(id!) });
+      // a reprocessed email can create a transaction or event
+      void queryClient.invalidateQueries({ queryKey: FINANCE_KEY });
+      void queryClient.invalidateQueries({ queryKey: CALENDAR_KEY });
     },
     onError: (e) => toast.error(errorMessage(e, t("reprocessError"))),
   });

@@ -3,7 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "@/i18n/navigation";
-import { refreshAccessToken, setAccessToken, setAuthLostHandler } from "@/lib/api/client";
+import { getAccessToken, refreshAccessToken, setAccessToken, setAuthLostHandler } from "@/lib/api/client";
 import * as authApi from "@/lib/api/endpoints/auth";
 import type { AuthUser } from "@/lib/api/types";
 
@@ -45,7 +45,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        if (await refreshAccessToken()) {
+        // a remount (e.g. language switch) already has a token: skip an extra rotation
+        if (getAccessToken() || (await refreshAccessToken())) {
           const session = await authApi.getSession();
           if (cancelled) return;
           setUser({ id: session.user.id, email: session.user.email });

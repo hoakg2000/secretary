@@ -29,7 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link, useRouter } from "@/i18n/navigation";
 import { deleteSession, renameSession } from "@/lib/api/endpoints/chat";
 import type { ChatSession } from "@/lib/api/types";
-import { SESSIONS_KEY, useSessionsInfinite } from "@/lib/chat/queries";
+import { messagesKey, SESSIONS_KEY, useSessionsInfinite } from "@/lib/chat/queries";
 import { cn } from "@/lib/utils";
 import { NewChatDialog } from "./character-picker";
 import { errorMessage } from "./error-message";
@@ -168,7 +168,7 @@ export function SessionList({ activeId, onNavigate }: { activeId?: string; onNav
     mutationFn: (s: ChatSession) => deleteSession(s.id),
     onSuccess: (_, s) => {
       setToDelete(null);
-      queryClient.removeQueries({ queryKey: ["chat", "messages", s.id] });
+      queryClient.removeQueries({ queryKey: messagesKey(s.id) });
       void queryClient.invalidateQueries({ queryKey: SESSIONS_KEY });
       if (s.id === activeId) router.push("/chat");
     },

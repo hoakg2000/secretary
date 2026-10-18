@@ -12,7 +12,7 @@ describe("parseAmount", () => {
     ["1.500.000", 1500000],
     ["1 500 000", 1500000],
   ])("%s -> %s", (input, expected) => expect(parseAmount(input)).toBe(expected));
-  it.each(["", "abc", "1..2", "12a", "-5"])("rejects %j", (input) => expect(parseAmount(input)).toBeNull());
+  it.each(["", "abc", "1..2", "12a", "-5", "1.5.0", "10.00.0"])("rejects %j", (input) => expect(parseAmount(input)).toBeNull());
 });
 
 describe("hasMaxTwoDecimals", () => {

@@ -15,7 +15,8 @@ export function Composer({
   streaming: boolean;
   /** e.g. no character chosen yet */
   disabled?: boolean;
-  onSend: (text: string) => void;
+  /** Resolves false when the text was not accepted and should stay in the box. */
+  onSend: (text: string) => Promise<boolean>;
   onStop: () => void;
 }) {
   const t = useTranslations("chat");
@@ -39,8 +40,11 @@ export function Composer({
   const submit = () => {
     const value = text.trim();
     if (!value || streaming || disabled) return;
-    onSend(value);
     setText("");
+    // keep the typed text when the request was rejected before streaming
+    void onSend(value).then((ok) => {
+      if (!ok) setText((cur) => cur || value);
+    });
   };
 
   return (

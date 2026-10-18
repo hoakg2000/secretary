@@ -26,6 +26,6 @@ export const listEmailRules = (type?: EmailRuleType) =>
 export const getEmailRule = (id: Id) => apiFetch<EmailRule>(`/email-rules/${id}`);
 export const createEmailRule = (input: EmailRuleInput) =>
   apiFetch<EmailRule>("/email-rules", { method: "POST", json: input });
-export const updateEmailRule = (id: Id, input: Partial<EmailRuleInput>) =>
+export const updateEmailRule = (id: Id, input: Partial<Omit<EmailRuleInput, "description">> & { description?: string | null }) =>
   apiFetch<EmailRule>(`/email-rules/${id}`, { method: "PATCH", json: input });
 export const deleteEmailRule = (id: Id) => apiFetch<null>(`/email-rules/${id}`, { method: "DELETE" });

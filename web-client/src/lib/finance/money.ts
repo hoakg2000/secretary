@@ -26,7 +26,7 @@ export function parseAmount(input: string): number | null {
   const mixed = seps.some((c) => c !== mark);
   if (mixed && seps.filter((c) => c === mark).length !== 1) return null;
   const decimal = mixed || (seps.length === 1 && s.length - lastSep - 1 <= 2);
-  if (!decimal) return Number(s.replace(/[.,]/g, ""));
+  if (!decimal) return /^\d{1,3}([.,]\d{3})+$/.test(s) ? Number(s.replace(/[.,]/g, "")) : null;
   return Number(`${s.slice(0, lastSep).replace(/[.,]/g, "")}.${s.slice(lastSep + 1)}`);
 }
 
