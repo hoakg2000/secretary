@@ -1,0 +1,43 @@
+{
+  "app": {
+    "name": "Secretary"
+  },
+  "nav": {
+    "chat": "Chat",
+    "dashboard": "Dashboard",
+    "characters": "Characters",
+    "emails": "Emails",
+    "calendar": "Calendar",
+    "finance": "Finance",
+    "memories": "Memories",
+    "settings": "Settings",
+    "main": "Main navigation",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu"
+  },
+  "common": {
+    "comingSoon": "Coming soon",
+    "comingSoonHint": "This page is under construction.",
+    "loading": "Loading…",
+    "logout": "Log out",
+    "language": "Language",
+    "signedInAs": "Signed in as",
+    "unknownError": "Something went wrong. Please try again.",
+    "networkError": "Cannot reach the server. Check your connection and try again."
+  },
+  "languages": {
+    "vi": "Tiếng Việt",
+    "en": "English"
+  },
+  "login": {
+    "title": "Log in",
+    "subtitle": "Log in to use your personal assistant.",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Log in",
+    "submitting": "Logging in…",
+    "tooManyRequests": "Too many attempts (5 per minute). Please wait a moment and try again.",
+    "invalidEmail": "Enter a valid email",
+    "passwordMin": "Password must be at least 6 characters"
+  }
+}

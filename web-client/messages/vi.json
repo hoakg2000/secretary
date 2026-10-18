@@ -1,0 +1,43 @@
+{
+  "app": {
+    "name": "Secretary"
+  },
+  "nav": {
+    "chat": "Trò chuyện",
+    "dashboard": "Tổng quan",
+    "characters": "Nhân vật",
+    "emails": "Email",
+    "calendar": "Lịch",
+    "finance": "Tài chính",
+    "memories": "Ký ức",
+    "settings": "Cài đặt",
+    "main": "Điều hướng chính",
+    "openMenu": "Mở menu",
+    "closeMenu": "Đóng menu"
+  },
+  "common": {
+    "comingSoon": "Sắp ra mắt",
+    "comingSoonHint": "Trang này đang được xây dựng.",
+    "loading": "Đang tải…",
+    "logout": "Đăng xuất",
+    "language": "Ngôn ngữ",
+    "signedInAs": "Đăng nhập với",
+    "unknownError": "Đã xảy ra lỗi. Vui lòng thử lại.",
+    "networkError": "Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại."
+  },
+  "languages": {
+    "vi": "Tiếng Việt",
+    "en": "English"
+  },
+  "login": {
+    "title": "Đăng nhập",
+    "subtitle": "Đăng nhập để dùng trợ lý cá nhân của bạn.",
+    "email": "Email",
+    "password": "Mật khẩu",
+    "submit": "Đăng nhập",
+    "submitting": "Đang đăng nhập…",
+    "tooManyRequests": "Bạn đã thử quá 5 lần trong một phút. Vui lòng đợi một lát rồi thử lại.",
+    "invalidEmail": "Email không hợp lệ",
+    "passwordMin": "Mật khẩu phải từ 6 ký tự trở lên"
+  }
+}
