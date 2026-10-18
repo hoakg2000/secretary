@@ -48,17 +48,19 @@ async function preflight(env: Record<string, string>): Promise<Check[]> {
     }
   };
 
-  if (!env.GEMINI_API_KEY) {
+  // the chat provider's key is required; Gemini also backs embeddings (memory) when its key is set
+  const keyName = LLM_TYPE === 'motapi' ? 'MOT_API_KEY' : 'GEMINI_API_KEY';
+  if (!env[keyName]) {
     checks.push({
-      name: 'GEMINI_API_KEY is set',
+      name: `${keyName} is set`,
       ok: false,
       ms: 0,
-      detail: 'GEMINI_API_KEY is empty in server/.env',
+      detail: `${keyName} is empty in server/.env`,
       kind: 'THIRD_PARTY_AUTH',
     });
     return checks;
   }
-  const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY ?? '' });
 
   // the hardcoded provider, through the same clients the app uses
   const config = { get: (key: string) => env[key] } as never;
@@ -70,6 +72,8 @@ async function preflight(env: Record<string, string>): Promise<Check[]> {
       tools: [{ name: 'get_time', description: 'Giờ hiện tại', parameters: { type: 'object', properties: {} } }],
     }),
   );
+  // without a Gemini key the memory test is skipped (chat-tools.e2e-spec.ts)
+  if (!env.GEMINI_API_KEY) return checks;
   // same default as MemoryService.generateEmbedding
   const embeddingModel = env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001';
   await run(`embedContent ${embeddingModel}`, () =>
@@ -102,8 +106,8 @@ function writePreflightReport(runDir: string, checks: Check[]) {
       '',
       '## What to do',
       '',
-      'No flow ran and no further call was made. Verify the Gemini key / quota / model in Google AI Studio, then re-run.',
-      kind === 'THIRD_PARTY_AUTH' ? 'The key in server/.env (GEMINI_API_KEY) is rejected or lacks permission.' : '',
+      'No flow ran and no further call was made. Verify the provider key / quota / model, then re-run.',
+      kind === 'THIRD_PARTY_AUTH' ? 'A key in server/.env (MOT_API_KEY or GEMINI_API_KEY) is missing, rejected or lacks permission.' : '',
       kind === 'THIRD_PARTY_QUOTA' ? 'The key is rate limited or out of quota (429 / RESOURCE_EXHAUSTED).' : '',
       kind === 'THIRD_PARTY_MODEL' ? `The model "${LLM_MODELS[LLM_TYPE]}" (or the embedding model) is not available to this key.` : '',
     );

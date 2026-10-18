@@ -7,7 +7,7 @@ import { MotApiClient } from './motapi.client';
 export const LLM_TYPE: LlmType = 'motapi';
 export const LLM_MODELS: Record<LlmType, string> = {
   gemini: 'gemini-3.6-flash',
-  motapi: 'gpt-6-astra',
+  motapi: 'claude-sonnet-5-5',
 };
 
 // Một số model bọc JSON trong ```json ... ```: bỏ một hàng rào đầu và một hàng rào cuối trước JSON.parse

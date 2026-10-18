@@ -18,12 +18,12 @@ export const runDir = () => {
 
 const statusCode = (text: string): number | null => {
   const match =
-    /"code"\s*:\s*(\d{3})/.exec(text) ?? /got status:?\s*(\d{3})/i.exec(text) ?? /"status"\s*:\s*(\d{3})/.exec(text);
+    /"code"\s*:\s*(\d{3})/.exec(text) ?? /MotAPI lỗi (\d{3})/.exec(text) ?? /got status:?\s*(\d{3})/i.exec(text) ?? /"status"\s*:\s*(\d{3})/.exec(text);
   return match ? Number(match[1]) : null;
 };
 
 /**
- * Maps a provider (Gemini) error text to THIRD_PARTY_*; null when the text carries no provider signature.
+ * Maps a provider (Gemini or MộtAPI) error text to THIRD_PARTY_*; null when the text carries no provider signature.
  * Only call it on error texts (SSE error frames, 5xx bodies, server error logs), never on normal replies.
  */
 export function classifyThirdParty(text: string): ThirdPartyKind | null {
@@ -47,7 +47,7 @@ export function classifyThirdParty(text: string): ThirdPartyKind | null {
     return 'THIRD_PARTY_MODEL';
   }
   if (
-    /UNAVAILABLE|overloaded|DEADLINE_EXCEEDED|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|generativelanguage\.googleapis/i.test(
+    /UNAVAILABLE|overloaded|DEADLINE_EXCEEDED|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|generativelanguage\.googleapis|motapis\.com/i.test(
       text,
     ) ||
     (code !== null && code >= 500)

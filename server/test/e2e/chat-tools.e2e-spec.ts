@@ -79,7 +79,8 @@ describe('chat tools: finance, calendar, memory (real Gemini)', () => {
     expect(vnHour(start)).toBe(15);
   });
 
-  it('saves a preference to memory and recalls it in a new session', async () => {
+  // memory embeddings are Gemini only: no key, no memory flow
+  it.skipIf(!process.env.GEMINI_API_KEY)('saves a preference to memory and recalls it in a new session', async () => {
     const saved = await chat(ctx.token, {
       message: 'Hãy nhớ rằng tôi thích uống cà phê sữa đá.',
       characterId: need(state.mariId, 'Mari character id'),
