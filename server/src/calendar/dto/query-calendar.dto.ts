@@ -1,23 +1,31 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDate, IsOptional } from 'class-validator';
+import { IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export class QueryCalendarDto {
   @ApiPropertyOptional({
-    description: 'Đầu khoảng lọc: lấy các sự kiện kết thúc từ thời điểm này trở đi',
-    example: '2026-10-01T00:00:00.000Z',
+    description: 'Tháng cần xem (1-12). Bỏ trống = tháng hiện tại theo APP_TIMEZONE',
+    minimum: 1,
+    maximum: 12,
+    example: 10,
   })
-  @Type(() => Date)
-  @IsDate()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(12)
   @IsOptional()
-  fromDate?: Date;
+  month?: number;
 
   @ApiPropertyOptional({
-    description: 'Cuối khoảng lọc: lấy các sự kiện bắt đầu trước thời điểm này',
-    example: '2026-10-31T23:59:59.000Z',
+    description: 'Năm cần xem (2000-2100). Bỏ trống = năm hiện tại theo APP_TIMEZONE',
+    minimum: 2000,
+    maximum: 2100,
+    example: 2026,
   })
-  @Type(() => Date)
-  @IsDate()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2100)
   @IsOptional()
-  toDate?: Date;
+  year?: number;
 }

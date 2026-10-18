@@ -1,6 +1,14 @@
-import { ExecutionContext, Logger, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ExecutionContext,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Reflector } from '@nestjs/core';
+import { BaseExceptionFilter, Reflector } from '@nestjs/core';
+import { PrismaExceptionFilter } from '../../src/common/filters/prisma-exception.filter';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { GenAiProvider } from '../../src/ai-agent/genai.provider';
 import { PendingActionStore } from '../../src/ai-agent/services/agent/pending-action.store';
@@ -37,6 +45,35 @@ describe('misc: small services and helpers', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  describe('PrismaExceptionFilter', () => {
+    const mapped = async (error: unknown) => {
+      const base = vi.spyOn(BaseExceptionFilter.prototype, 'catch').mockImplementation(() => undefined);
+      new PrismaExceptionFilter().catch(error as any, {} as any);
+      return base.mock.calls[0][0];
+    };
+
+    it('maps a real PrismaClientValidationError (null into a required column) to 400 without leaking details', async () => {
+      const character = await ctx.prisma.character.create({ data: { name: 'Stable' } });
+      const error = await rejection(ctx.prisma.character.update({ where: { id: character.id }, data: { name: null as any } }));
+      expect(error).toBeInstanceOf(Prisma.PrismaClientValidationError);
+
+      const result = await mapped(error);
+
+      expect(result).toBeInstanceOf(BadRequestException);
+      expect((result as BadRequestException).message).toBe('Dữ liệu không hợp lệ');
+      expect((await ctx.prisma.character.findUniqueOrThrow({ where: { id: character.id } })).name).toBe('Stable');
+    });
+
+    it('keeps mapping known request errors', async () => {
+      const dup = new Prisma.PrismaClientKnownRequestError('x', { code: 'P2002', clientVersion: 'test' });
+      const missing = new Prisma.PrismaClientKnownRequestError('x', { code: 'P2025', clientVersion: 'test' });
+
+      expect(await mapped(dup)).toBeInstanceOf(ConflictException);
+      vi.restoreAllMocks();
+      expect(await mapped(missing)).toBeInstanceOf(NotFoundException);
+    });
   });
 
   describe('AppService.getHello', () => {

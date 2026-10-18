@@ -11,6 +11,8 @@ export interface LlmToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
+  /** Có khi model gửi tham số không phải JSON object hợp lệ: args = {} và tool bị từ chối */
+  argsError?: string;
 }
 
 export type LlmMessage =

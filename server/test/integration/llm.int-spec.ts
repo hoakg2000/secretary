@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { GeminiClient } from '../../src/llm/gemini.client';
 import { LLM_MODELS, LlmService } from '../../src/llm/llm.service';
 import type { LlmBody, LlmEvent } from '../../src/llm/llm.types';
@@ -216,6 +216,41 @@ describe('llm integration (MotAPI client + LlmService, only fetch faked)', () =>
       ctx.http.respond('motapis.com', () => sseResponse([toolDelta({ index: 0, function: { name: 't' } })]));
 
       expect(await collect(user())).toEqual([{ type: 'tool_calls', calls: [{ id: 'call_0', name: 't', args: {} }] }]);
+    });
+
+    it('keeps the turn alive on malformed tool arguments: args {} plus an argsError marker, other calls intact', async () => {
+      ctx.http.respond('motapis.com', () =>
+        sseResponse([
+          toolDelta({ index: 0, id: 'a', function: { name: 'search_emails', arguments: '{"query": "ba' } }),
+          toolDelta({ index: 1, id: 'b', function: { name: 'get_financial_summary', arguments: '[1]' } }),
+          toolDelta({ index: 2, id: 'c', function: { name: 'get_financial_summary', arguments: '{}' } }),
+        ]),
+      );
+
+      expect(await collect(user())).toEqual([
+        {
+          type: 'tool_calls',
+          calls: [
+            { id: 'a', name: 'search_emails', args: {}, argsError: 'invalid JSON arguments' },
+            { id: 'b', name: 'get_financial_summary', args: {}, argsError: 'invalid JSON arguments' },
+            { id: 'c', name: 'get_financial_summary', args: {} },
+          ],
+        },
+      ]);
+    });
+
+    it('skips non-JSON data lines and warns once instead of throwing', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const body =
+        `data: not json\n\ndata: ${JSON.stringify(delta({ content: 'one' }))}\n\ndata: {broken\n\n` +
+        `data: ${JSON.stringify(delta({ content: ' two' }))}\n\n`;
+      ctx.http.respond('motapis.com', () => new Response(body, { status: 200 }));
+
+      expect(await collect(user())).toEqual([
+        { type: 'text', text: 'one' },
+        { type: 'text', text: ' two' },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(1);
     });
 
     it('emits a usage event with the token counts', async () => {

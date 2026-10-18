@@ -126,6 +126,16 @@ describe('character integration', () => {
       expect(row.systemPrompt).toBe('Keep me');
     });
 
+    it('rejects name: null in the update DTO (400) and leaves the row unchanged; nullable fields accept null', async () => {
+      const character = await seedCharacter(ctx.prisma, { name: 'Stable' });
+
+      const errors = await validate(plainToInstance(UpdateCharacterDto, { name: null }));
+
+      expect(errors.map((e) => e.property)).toEqual(['name']);
+      expect(await validate(plainToInstance(UpdateCharacterDto, { systemPrompt: null, voiceId: null }))).toEqual([]);
+      expect((await ctx.prisma.character.findUniqueOrThrow({ where: { id: character.id } })).name).toBe('Stable');
+    });
+
     it('throws 404 for an unknown id and changes nothing', async () => {
       const character = await seedCharacter(ctx.prisma);
 

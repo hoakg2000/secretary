@@ -1,5 +1,8 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { EmailMatcher, EmailRuleType, EmailStatus } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { UpdateEmailRuleDto } from '../../src/email/dto/update-email-rule.dto';
 import { EmailRuleService } from '../../src/email/email-rule.service';
 import { EmailService } from '../../src/email/email.service';
 import { EmailTools } from '../../src/email/email.tools';
@@ -126,6 +129,20 @@ describe('email integration (rules + ingest, queue paused so the worker never ta
         matchValue: 'ceo@example.com',
         isActive: false,
         matcher: 'sender',
+      });
+    });
+
+    it('rejects null on non-nullable fields in the update DTO (400) and leaves the row unchanged', async () => {
+      const r = await rule({});
+
+      for (const field of ['type', 'matcher', 'matchValue', 'isActive']) {
+        const errors = await validate(plainToInstance(UpdateEmailRuleDto, { [field]: null }));
+        expect(errors.map((e) => e.property), field).toEqual([field]);
+      }
+      expect(await validate(plainToInstance(UpdateEmailRuleDto, { description: null }))).toEqual([]);
+      expect(await ctx.prisma.emailRule.findUniqueOrThrow({ where: { id: r.id } })).toMatchObject({
+        matchValue: r.matchValue,
+        isActive: r.isActive,
       });
     });
 

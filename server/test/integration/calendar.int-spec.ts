@@ -1,9 +1,14 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { GoogleClientFactory } from '../../src/auth/google-client.factory';
 import { CalendarSyncService } from '../../src/calendar/calendar-sync.service';
 import { CalendarService } from '../../src/calendar/calendar.service';
 import { CalendarTools } from '../../src/calendar/calendar.tools';
-import { googleError, MISSING, createTestModule, resetState, seedEvent, seedGoogleUser, type TestContext } from './harness';
+import { AiUpdateEventDto } from '../../src/calendar/dto/ai-update-event.dto';
+import { QueryCalendarDto } from '../../src/calendar/dto/query-calendar.dto';
+import { UpdateEventDto } from '../../src/calendar/dto/update-event.dto';
+import { googleError, MISSING, overrideConfig, createTestModule, resetState, seedEvent, seedGoogleUser, type TestContext } from './harness';
 
 const at = (iso: string) => new Date(iso);
 
@@ -82,87 +87,94 @@ describe('calendar integration', () => {
   });
 
   describe('getEvents', () => {
-    const seedRange = async () => {
-      const before = await seedEvent(ctx.prisma, {
-        title: 'before',
-        startTime: at('2030-01-01T08:00:00Z'),
-        endTime: at('2030-01-01T09:00:00Z'),
-      });
-      const inside = await seedEvent(ctx.prisma, {
-        title: 'inside',
-        startTime: at('2030-01-02T10:00:00Z'),
-        endTime: at('2030-01-02T11:00:00Z'),
-      });
-      const spanning = await seedEvent(ctx.prisma, {
-        title: 'spanning',
-        startTime: at('2030-01-01T12:00:00Z'),
-        endTime: at('2030-01-05T12:00:00Z'),
-      });
-      const after = await seedEvent(ctx.prisma, {
-        title: 'after',
-        startTime: at('2030-01-04T00:00:00Z'),
-        endTime: at('2030-01-04T01:00:00Z'),
-      });
-      return { before, inside, spanning, after };
-    };
+    const seedAt = (title: string, start: string, end: string) =>
+      seedEvent(ctx.prisma, { title, startTime: at(start), endTime: at(end) });
+    const titles = (events: { title: string }[]) => events.map((e) => e.title);
 
-    it('returns every event ordered by start time when no range is given', async () => {
-      await seedRange();
+    it('returns the whole month ordered by start time, excluding other months and years', async () => {
+      await seedAt('late', '2030-03-20T10:00:00Z', '2030-03-20T11:00:00Z');
+      await seedAt('early', '2030-03-02T10:00:00Z', '2030-03-02T11:00:00Z');
+      await seedAt('april', '2030-04-10T10:00:00Z', '2030-04-10T11:00:00Z');
+      await seedAt('other year', '2031-03-10T10:00:00Z', '2031-03-10T11:00:00Z');
 
-      const result = await service.getEvents({});
-
-      expect(result.map((e) => e.title)).toEqual(['before', 'spanning', 'inside', 'after']);
+      expect(titles(await service.getEvents({ month: 3, year: 2030 }))).toEqual(['early', 'late']);
     });
 
-    it('returns events overlapping the range, including one that spans it', async () => {
-      await seedRange();
+    it('draws month boundaries in APP_TIMEZONE (Asia/Ho_Chi_Minh, UTC+7)', async () => {
+      // 16:59Z on Jan 31 = 23:59 Jan 31 local; 17:00Z = 00:00 Feb 1 local
+      await seedAt('last of jan', '2030-01-31T16:59:00Z', '2030-01-31T16:59:30Z');
+      await seedAt('first of feb', '2030-01-31T17:00:00Z', '2030-01-31T17:30:00Z');
 
-      const result = await service.getEvents({
-        fromDate: at('2030-01-02T00:00:00Z'),
-        toDate: at('2030-01-03T00:00:00Z'),
-      });
-
-      expect(result.map((e) => e.title)).toEqual(['spanning', 'inside']);
+      expect(titles(await service.getEvents({ month: 1, year: 2030 }))).toEqual(['last of jan']);
+      expect(titles(await service.getEvents({ month: 2, year: 2030 }))).toEqual(['first of feb']);
     });
 
-    it('includes an event that ends exactly at fromDate or starts exactly at toDate', async () => {
-      await seedRange();
+    it('uses the configured APP_TIMEZONE for the boundaries', async () => {
+      overrideConfig(ctx, { APP_TIMEZONE: 'America/New_York' });
+      // New York is UTC-5 in winter: Feb 1 00:00 local = 05:00Z
+      await seedAt('last of jan', '2030-02-01T04:59:00Z', '2030-02-01T04:59:30Z');
+      await seedAt('first of feb', '2030-02-01T05:00:00Z', '2030-02-01T05:30:00Z');
 
-      const result = await service.getEvents({
-        fromDate: at('2030-01-01T09:00:00Z'),
-        toDate: at('2030-01-01T09:00:00Z'),
-      });
-
-      expect(result.map((e) => e.title)).toEqual(['before']);
+      expect(titles(await service.getEvents({ month: 2, year: 2030 }))).toEqual(['first of feb']);
     });
 
-    it('applies only fromDate when toDate is missing', async () => {
-      await seedRange();
+    it('handles December (the next-month boundary rolls into the next year)', async () => {
+      await seedAt('dec', '2030-12-31T16:00:00Z', '2030-12-31T16:30:00Z');
+      await seedAt('jan', '2030-12-31T17:00:00Z', '2030-12-31T17:30:00Z');
 
-      const result = await service.getEvents({ fromDate: at('2030-01-04T00:30:00Z') });
-
-      expect(result.map((e) => e.title)).toEqual(['spanning', 'after']);
+      expect(titles(await service.getEvents({ month: 12, year: 2030 }))).toEqual(['dec']);
     });
 
-    it('applies only toDate when fromDate is missing', async () => {
-      await seedRange();
+    it('includes an event spanning two months in both of them', async () => {
+      await seedAt('span', '2030-01-30T00:00:00Z', '2030-02-03T00:00:00Z');
 
-      const result = await service.getEvents({ toDate: at('2030-01-01T10:00:00Z') });
+      expect(titles(await service.getEvents({ month: 1, year: 2030 }))).toEqual(['span']);
+      expect(titles(await service.getEvents({ month: 2, year: 2030 }))).toEqual(['span']);
+      expect(await service.getEvents({ month: 3, year: 2030 })).toEqual([]);
+    });
 
-      expect(result.map((e) => e.title)).toEqual(['before']);
+    it('defaults to the current month and year in APP_TIMEZONE', async () => {
+      await seedAt('now month', '2030-03-10T10:00:00Z', '2030-03-10T11:00:00Z');
+      await seedAt('next month', '2030-04-10T10:00:00Z', '2030-04-10T11:00:00Z');
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(at('2030-03-15T12:00:00Z'));
+      expect(titles(await service.getEvents({}))).toEqual(['now month']);
+
+      // 18:00Z on Mar 31 is already April 1 in Ho Chi Minh
+      vi.setSystemTime(at('2030-03-31T18:00:00Z'));
+      expect(titles(await service.getEvents({}))).toEqual(['next month']);
+      vi.useRealTimers();
+    });
+
+    it('fills the missing half from the current date', async () => {
+      await seedAt('in march', '2030-03-10T10:00:00Z', '2030-03-10T11:00:00Z');
+      await seedAt('in may', '2030-05-10T10:00:00Z', '2030-05-10T11:00:00Z');
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(at('2030-03-15T12:00:00Z'));
+
+      expect(titles(await service.getEvents({ month: 5 }))).toEqual(['in may']);
+      expect(titles(await service.getEvents({ year: 2030 }))).toEqual(['in march']);
+      vi.useRealTimers();
     });
 
     it('hides soft-deleted events', async () => {
       await seedEvent(ctx.prisma, { title: 'gone', deletedAt: new Date() });
       await seedEvent(ctx.prisma, { title: 'kept' });
 
-      const result = await service.getEvents({});
-
-      expect(result.map((e) => e.title)).toEqual(['kept']);
+      expect(titles(await service.getEvents({ month: 1, year: 2030 }))).toEqual(['kept']);
     });
 
     it('returns an empty list when nothing matches', async () => {
-      expect(await service.getEvents({})).toEqual([]);
+      expect(await service.getEvents({ month: 1, year: 2030 })).toEqual([]);
+    });
+
+    it('validates month and year in the DTO', async () => {
+      const bad = [{ month: 0 }, { month: 13 }, { month: 1.5 }, { year: 1999 }, { year: 2101 }, { month: 'x' }];
+      for (const query of bad) {
+        const errors = await validate(plainToInstance(QueryCalendarDto, query));
+        expect(errors.length, JSON.stringify(query)).toBeGreaterThan(0);
+      }
+      expect(await validate(plainToInstance(QueryCalendarDto, { month: '12', year: '2030' }))).toEqual([]);
     });
   });
 
@@ -256,6 +268,21 @@ describe('calendar integration', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    it('rejects null on required fields in the PATCH and AI update DTOs; the row stays unchanged', async () => {
+      const event = await seedSynced({ title: 'Stable' });
+
+      for (const field of ['title', 'startTime', 'endTime']) {
+        for (const Dto of [UpdateEventDto, AiUpdateEventDto]) {
+          const errors = await validate(plainToInstance(Dto, { id: event.id, [field]: null }));
+          expect(errors.map((e) => e.property), `${Dto.name}.${field}`).toContain(field);
+        }
+      }
+      // nullable columns still accept null (clears the value); an empty body stays valid
+      expect(await validate(plainToInstance(UpdateEventDto, { description: null, location: null }))).toEqual([]);
+      expect(await validate(plainToInstance(UpdateEventDto, {}))).toEqual([]);
+      expect((await row(event.id)).title).toBe('Stable');
+    });
+
     it('throws 404 for an unknown id', async () => {
       await expect(service.updateEvent(MISSING, { title: 'x' })).rejects.toBeInstanceOf(NotFoundException);
     });
@@ -295,7 +322,7 @@ describe('calendar integration', () => {
       const saved = await row(event.id);
       expect(saved.deletedAt).toBeInstanceOf(Date);
       expect(saved.syncState).toMatchObject({ syncStatus: 'DIRTY', googleEventId: 'g-1' });
-      expect(await service.getEvents({})).toEqual([]);
+      expect(await service.getEvents({ month: 1, year: 2030 })).toEqual([]);
       await expect(service.getEventById(event.id)).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -683,14 +710,11 @@ describe('calendar integration', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('getCalendarEvents returns events in the requested range', async () => {
+    it('getCalendarEvents returns events of the requested month', async () => {
       await seedEvent(ctx.prisma, { title: 'in', startTime: at('2030-05-01T10:00:00Z'), endTime: at('2030-05-01T11:00:00Z') });
       await seedEvent(ctx.prisma, { title: 'out', startTime: at('2030-06-01T10:00:00Z'), endTime: at('2030-06-01T11:00:00Z') });
 
-      const result = await tools.getCalendarEvents({
-        fromDate: at('2030-05-01T00:00:00Z'),
-        toDate: at('2030-05-02T00:00:00Z'),
-      });
+      const result = await tools.getCalendarEvents({ month: 5, year: 2030 });
 
       expect(result.map((e) => e.title)).toEqual(['in']);
     });

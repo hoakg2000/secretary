@@ -69,11 +69,9 @@ describe('chat tools: finance, calendar, memory (real Gemini)', () => {
     expect(toolResult, 'tool_result frame for create_calendar_event').toBeDefined();
     expect(toolResult?.result?.id).toBeTruthy();
 
-    const from = new Date().toISOString();
-    const to = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
-    const { body } = await api('GET', `/calendar?fromDate=${encodeURIComponent(from)}&toDate=${encodeURIComponent(to)}`, {
-      token: ctx.token,
-    });
+    // tomorrow may fall in the next month
+    const [year, month] = vnDate(new Date(Date.now() + 24 * 3600 * 1000)).split('-').map(Number);
+    const { body } = await api('GET', `/calendar?month=${month}&year=${year}`, { token: ctx.token });
     const event = body.data.find((e: { id: string }) => e.id === toolResult?.result?.id);
     expect(event, 'event listed by GET /calendar').toBeDefined();
     const start = new Date(event.startTime);

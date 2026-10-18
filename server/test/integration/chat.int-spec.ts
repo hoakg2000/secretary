@@ -1,10 +1,11 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ChatRole } from '@prisma/client';
+import { CalendarService } from '../../src/calendar/calendar.service';
 import { lastValueFrom, toArray } from 'rxjs';
 import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
 import prompt from '../../src/ai-agent/prompts/data.json';
 import { ReplyStreamParser } from '../../src/ai-agent/services/agent/reply-stream.parser';
-import { AgentService, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
+import { AgentService, CHAT_ERROR_MESSAGE, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
 import { buildCharacterPrompt } from '../../src/character/character-prompt';
 import { ChatSessionService } from '../../src/ai-agent/services/chat/chat-session.service';
 import { LLM_MODELS, LLM_TYPE } from '../../src/llm/llm.service';
@@ -888,6 +889,82 @@ describe('chat integration', () => {
       });
     });
 
+    describe('tool errors', () => {
+      const callCalendar = (args: Record<string, unknown> = {}, extra: { argsError?: string } = {}) =>
+        ctx.llm.script.push([toolCalls({ id: 't', name: 'get_calendar_events', args, ...extra })], reply('ok'));
+
+      it('answers the model invalid arguments when the arguments were not valid JSON, and does not run the tool', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        const run = vi.spyOn(CalendarService.prototype, 'getEvents');
+        callCalendar({}, { argsError: 'invalid JSON arguments' });
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(types(frames)).toEqual(['session', 'text', 'reply', 'done']);
+        expect(toolMessagesOf(1)[0].content).toMatchObject({ error: 'invalid arguments' });
+        expect(run).not.toHaveBeenCalled();
+        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
+        expect(model.toolCalls).toMatchObject([{ tool: 'get_calendar_events', error: 'invalid arguments' }]);
+      });
+
+      it('rejects an out-of-range month from the model as invalid arguments', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        callCalendar({ month: 13 });
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(toolMessagesOf(1)[0].content).toMatchObject({ error: 'invalid arguments' });
+      });
+
+      it('rejects a legacy fromDate/toDate call (no open ranges any more)', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        callCalendar({ fromDate: '2030-01-01T00:00:00Z' });
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(toolMessagesOf(1)[0].content).toMatchObject({ error: 'invalid arguments' });
+      });
+
+      it('gives the model a generic message for an unexpected tool error and stores the same', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        vi.spyOn(CalendarService.prototype, 'getEvents').mockRejectedValueOnce(new Error('relation "local_calendars" does not exist'));
+        callCalendar({ month: 1, year: 2030 });
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(toolMessagesOf(1)[0].content).toEqual({ error: 'tool failed' });
+        const model = (await messagesOf(frames[0].sessionId)).find((m) => m.role === 'MODEL')!;
+        expect(JSON.stringify(model.toolCalls)).not.toContain('local_calendars');
+        expect(model.toolCalls).toMatchObject([{ tool: 'get_calendar_events', error: 'tool failed' }]);
+      });
+
+      it('keeps the message of a 4xx HttpException for the model', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        vi.spyOn(CalendarService.prototype, 'getEvents').mockRejectedValueOnce(new NotFoundException('Không tìm thấy'));
+        callCalendar({ month: 1, year: 2030 });
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(toolMessagesOf(1)[0].content).toEqual({ error: 'Không tìm thấy' });
+      });
+
+      it('hides the message of a 5xx HttpException', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        vi.spyOn(CalendarService.prototype, 'getEvents').mockRejectedValueOnce(new ServiceUnavailableException('internal host down'));
+        callCalendar({ month: 1, year: 2030 });
+
+        await stream(user.id, { characterId: character.id });
+
+        expect(toolMessagesOf(1)[0].content).toEqual({ error: 'tool failed' });
+      });
+    });
+
     describe('write tools and confirmation', () => {
       const proposeTransaction = async (accountId: string) => {
         const user = await seedUser(ctx.prisma);
@@ -1033,9 +1110,38 @@ describe('chat integration', () => {
         const frames = await stream(user.id, { characterId: character.id, message: 'are you there' });
 
         expect(types(frames)).toEqual(['session', 'error']);
-        expect(frames[1].message).toBe('HTTP 500');
+        expect(frames[1].message).toBe(CHAT_ERROR_MESSAGE);
         const stored = await messagesOf(frames[0].sessionId);
         expect(stored.map((m) => [m.role, m.content])).toEqual([['USER', 'are you there']]);
+      });
+
+      it('never sends the raw error text to the client, only logs it', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+        ctx.llm.script.push([new Error('MotAPI lỗi 401: key=sk-secret-123')]);
+
+        const frames = await stream(user.id, { characterId: character.id });
+
+        expect(frames.at(-1)).toEqual({ type: 'error', message: CHAT_ERROR_MESSAGE });
+        expect(JSON.stringify(frames)).not.toContain('sk-secret');
+        expect(log).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: expect.stringContaining('sk-secret') }));
+      });
+
+      it('hides 5xx HttpException text (e.g. missing API key) but keeps 4xx messages', async () => {
+        const user = await seedUser(ctx.prisma);
+        const character = await withCharacter();
+        vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+        ctx.llm.script.push([new ServiceUnavailableException('MOT_API_KEY chưa được cấu hình')]);
+
+        const unavailable = await stream(user.id, { characterId: character.id });
+
+        expect(unavailable.at(-1)).toEqual({ type: 'error', message: CHAT_ERROR_MESSAGE });
+
+        ctx.llm.script.push([new BadRequestException('Yêu cầu không hợp lệ')]);
+        const bad = await stream(user.id, { characterId: character.id });
+
+        expect(bad.at(-1)).toEqual({ type: 'error', message: 'Yêu cầu không hợp lệ' });
       });
 
       it('does not store a half answer when the stream breaks after some text', async () => {
@@ -1110,7 +1216,7 @@ describe('chat integration', () => {
 
         expect(types(frames)).toEqual(['session', 'tool_call', 'text', 'reply', 'done']);
         expect(toolMessagesOf(1)[0].content).toEqual({
-          error: 'embedding down',
+          error: 'tool failed',
         });
         expect(await ctx.prisma.aiMemory.count()).toBe(0);
         expect(await ctx.prisma.chatMessage.count({ where: { memoryId: { not: null } } })).toBe(0);

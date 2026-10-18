@@ -65,17 +65,17 @@ export class CalendarTools {
   @AiTool({
     name: 'get_calendar_events',
     description:
-      'Truy vấn danh sách các sự kiện lịch của người dùng theo khoảng thời gian.',
+      'Truy vấn các sự kiện lịch của người dùng trong một tháng (cả tháng, sắp theo giờ bắt đầu). Bỏ trống tháng/năm = tháng hiện tại.',
     dto: QueryCalendarDto,
     parameters: {
-      fromDate: {
-        type: 'string',
-        description: 'Thời gian bắt đầu lọc theo định dạng ISO 8601',
+      month: {
+        type: 'number',
+        description: 'Tháng cần xem, từ 1 đến 12 (bỏ trống = tháng hiện tại)',
         required: false,
       },
-      toDate: {
-        type: 'string',
-        description: 'Thời gian kết thúc lọc theo định dạng ISO 8601',
+      year: {
+        type: 'number',
+        description: 'Năm cần xem, từ 2000 đến 2100 (bỏ trống = năm hiện tại)',
         required: false,
       },
     },

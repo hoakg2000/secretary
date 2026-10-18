@@ -75,11 +75,9 @@ describe('email pipeline flow (real Gemini)', () => {
     const row = await waitForEmailDone(ctx.token, need(body.data?.emailLogId, 'meeting email log id'));
     expect(row.status).toBe('PROCESSED');
 
-    const from = new Date().toISOString();
-    const to = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
-    const events = await api('GET', `/calendar?fromDate=${encodeURIComponent(from)}&toDate=${encodeURIComponent(to)}`, {
-      token: ctx.token,
-    });
+    // tomorrow may fall in the next month
+    const [year, month] = date.split('-').map(Number);
+    const events = await api('GET', `/calendar?month=${month}&year=${year}`, { token: ctx.token });
     expect(events.status).toBe(200);
     expect(events.body.data.length).toBeGreaterThanOrEqual(1);
     // 15:00 Ho Chi Minh time is 08:00 UTC; tolerate the model picking a nearby hour

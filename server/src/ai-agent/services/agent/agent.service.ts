@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleInit,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
@@ -48,6 +50,9 @@ interface ChatTurn {
   toolCalls: Record<string, unknown>[];
   memoryLinked: boolean;
 }
+
+/** Thông báo cố định gửi client khi lượt chat lỗi ngoài ý muốn */
+export const CHAT_ERROR_MESSAGE = 'Đã xảy ra lỗi khi xử lý chat AI';
 
 /** Số vòng gọi tool tối đa cho một tin nhắn của người dùng */
 export const MAX_TOOL_ROUNDS = 5;
@@ -263,9 +268,13 @@ export class AgentService implements OnModuleInit {
         .then(() => emit({ type: 'done' }))
         .catch((error: any) => {
           this.logger.error('Lỗi trong quá trình ChatStream:', error);
+          // Chi tiết chỉ vào log; client chỉ nhận thông báo cố định (lỗi 4xx của nghiệp vụ đã có câu chữ an toàn)
           emit({
             type: 'error',
-            message: error.message || 'Đã xảy ra lỗi khi xử lý chat AI',
+            message:
+              error instanceof HttpException && error.getStatus() < 500
+                ? error.message
+                : CHAT_ERROR_MESSAGE,
           });
         })
         .finally(() => subscriber.complete());
@@ -355,7 +364,7 @@ export class AgentService implements OnModuleInit {
       if (calls.length === 0) break;
 
       if (round >= MAX_TOOL_ROUNDS) {
-        throw new Error(
+        throw new UnprocessableEntityException(
           `AI gọi công cụ quá ${MAX_TOOL_ROUNDS} vòng liên tiếp. Đã dừng xử lý.`,
         );
       }
@@ -414,6 +423,11 @@ export class AgentService implements OnModuleInit {
       return { error: `unknown tool: ${call.name}` };
     }
 
+    if (call.argsError) {
+      record({ error: 'invalid arguments' });
+      return { error: 'invalid arguments', details: [call.argsError] };
+    }
+
     let args: object = call.args;
     if (tool.options.dto) {
       args = plainToInstance(tool.options.dto, args);
@@ -467,8 +481,13 @@ export class AgentService implements OnModuleInit {
       return { result };
     } catch (error: any) {
       this.logger.warn(`AiTool ${call.name} lỗi: ${error.message}`);
-      record({ error: error.message || 'tool failed' });
-      return { error: error.message || 'tool failed' };
+      // Chỉ lỗi 4xx (validate/không tìm thấy) có nội dung dành cho model; lỗi khác không lộ chi tiết (DB, mạng...)
+      const message =
+        error instanceof HttpException && error.getStatus() < 500
+          ? error.message
+          : 'tool failed';
+      record({ error: message });
+      return { error: message };
     }
   }
 

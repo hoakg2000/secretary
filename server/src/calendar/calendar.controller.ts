@@ -68,11 +68,16 @@ export class CalendarController {
     };
   }
 
-  @ApiOperation({ summary: 'Lấy danh sách các sự kiện lịch cục bộ' })
+  @ApiOperation({
+    summary: 'Lấy các sự kiện lịch cục bộ trong một tháng',
+    description:
+      'Theo month (1-12) và year (2000-2100); bỏ trống = tháng/năm hiện tại theo APP_TIMEZONE. Sắp theo giờ bắt đầu.',
+  })
   @ApiResponse({
     status: 200,
     description: 'Lấy danh sách sự kiện lịch thành công',
   })
+  @ApiResponse({ status: 400, description: 'month/year không hợp lệ' })
   @Get()
   @HttpCode(HttpStatus.OK)
   async getEvents(@Query() queryDto: QueryCalendarDto) {

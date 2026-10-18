@@ -1,4 +1,8 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LlmBody, LlmEvent, LlmMessage, LlmToolCall } from './llm.types';
 
@@ -8,6 +12,8 @@ const TIMEOUT_MS = 120_000;
 /** Client MộtAPI (tương thích OpenAI chat completions), stream SSE bằng fetch */
 @Injectable()
 export class MotApiClient {
+  private readonly logger = new Logger(MotApiClient.name);
+
   constructor(private readonly configService: ConfigService) {}
 
   async *stream(model: string, body: LlmBody): AsyncGenerator<LlmEvent> {
@@ -38,11 +44,21 @@ export class MotApiClient {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    const logger = this.logger;
+    let warned = false;
     const parse = function* (line: string): Generator<LlmEvent> {
       if (!line.startsWith('data:')) return;
       const data = line.slice(5).trim();
       if (!data || data === '[DONE]') return;
-      const chunk = JSON.parse(data);
+      let chunk: any;
+      try {
+        chunk = JSON.parse(data);
+      } catch {
+        // Dòng data không phải JSON: bỏ qua, không làm hỏng cả lượt
+        if (!warned) logger.warn('Bỏ qua dòng data không phải JSON từ MotAPI');
+        warned = true;
+        return;
+      }
       const delta = chunk.choices?.[0]?.delta;
       if (delta?.content) yield { type: 'text', text: delta.content };
       for (const tc of delta?.tool_calls ?? []) {
@@ -83,11 +99,19 @@ export class MotApiClient {
     if (pending.size > 0) {
       const calls: LlmToolCall[] = [...pending.entries()]
         .sort(([a], [b]) => a - b)
-        .map(([index, c]) => ({
-          id: c.id || `call_${index}`,
-          name: c.name,
-          args: c.args ? JSON.parse(c.args) : {},
-        }));
+        .map(([index, c]): LlmToolCall => {
+          const call = { id: c.id || `call_${index}`, name: c.name };
+          if (!c.args) return { ...call, args: {} };
+          try {
+            const args = JSON.parse(c.args);
+            if (args && typeof args === 'object' && !Array.isArray(args)) {
+              return { ...call, args };
+            }
+          } catch {
+            // rơi xuống dưới: tham số hỏng
+          }
+          return { ...call, args: {}, argsError: 'invalid JSON arguments' };
+        });
       yield { type: 'tool_calls', calls };
     }
   }

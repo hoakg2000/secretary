@@ -1,5 +1,8 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { TransactionType } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { UpdateBankAccountDto } from '../../src/finance/dto/update-bank-account.dto';
 import { FinanceService } from '../../src/finance/finance.service';
 import { MISSING, createTestModule, resetState, seedAccount, type TestContext } from './harness';
 
@@ -117,6 +120,17 @@ describe('finance integration', () => {
       const row = await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id: acc.id } });
       expect(row).toMatchObject({ accountName: 'Renamed', isActive: false, bankCode: 'VCB' });
       expect(row.cachedBalance.toFixed(2)).toBe('500.50');
+    });
+
+    it('rejects null on non-nullable fields in the update DTO (400) and leaves the row unchanged', async () => {
+      const acc = await account();
+
+      for (const field of ['accountName', 'bankCode', 'accountNumber', 'currency', 'isActive']) {
+        const errors = await validate(plainToInstance(UpdateBankAccountDto, { [field]: null }));
+        expect(errors.map((e) => e.property), field).toEqual([field]);
+      }
+      const row = await ctx.prisma.bankAccount.findUniqueOrThrow({ where: { id: acc.id } });
+      expect(row).toMatchObject({ accountName: acc.accountName, isActive: acc.isActive, currency: acc.currency });
     });
 
     it('throws NotFound for an unknown id', async () => {
