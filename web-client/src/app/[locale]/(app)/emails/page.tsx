@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/layout/coming-soon";
+import { EmailsView } from "@/components/emails/emails-view";
 
 export default function Page() {
-  return <ComingSoon navKey="emails" />;
+  return <EmailsView />;
 }

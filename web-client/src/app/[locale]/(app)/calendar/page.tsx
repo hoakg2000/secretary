@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/layout/coming-soon";
+import { CalendarView } from "@/components/calendar/calendar-view";
 
 export default function Page() {
-  return <ComingSoon navKey="calendar" />;
+  return <CalendarView />;
 }

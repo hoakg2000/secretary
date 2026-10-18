@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/layout/coming-soon";
+import { CharactersView } from "@/components/characters/characters-view";
 
 export default function Page() {
-  return <ComingSoon navKey="characters" />;
+  return <CharactersView />;
 }
