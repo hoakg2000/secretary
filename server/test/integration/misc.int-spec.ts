@@ -13,7 +13,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { GenAiProvider } from '../../src/ai-agent/genai.provider';
 import { PendingActionStore } from '../../src/ai-agent/services/agent/pending-action.store';
 import { RagChunkService } from '../../src/ai-agent/services/rag-chunk/rag-chunk.service';
-import { AppService } from '../../src/app.service';
+import { AppController } from '../../src/app.controller';
 import { GoogleClientFactory } from '../../src/auth/google-client.factory';
 import { JwtAuthGuard } from '../../src/auth/guards/jwt-auth.guard';
 import { CalendarSyncService } from '../../src/calendar/calendar-sync.service';
@@ -80,9 +80,9 @@ describe('misc: small services and helpers', () => {
     });
   });
 
-  describe('AppService.getHello', () => {
-    it('returns the greeting', () => {
-      expect(ctx.moduleRef.get(AppService).getHello()).toBe('Hello World!');
+  describe('AppController.health', () => {
+    it('returns status ok', () => {
+      expect(ctx.moduleRef.get(AppController).health()).toEqual({ status: 'ok' });
     });
   });
 

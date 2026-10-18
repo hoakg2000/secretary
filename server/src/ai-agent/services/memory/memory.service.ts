@@ -74,7 +74,7 @@ export class MemoryService {
     const vectorStr = MemoryQueries.toVector(embedding);
 
     // Một transaction: không để lại bản ghi thiếu vector nếu bước ghi embedding lỗi
-    const memory = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const created = await tx.aiMemory.create({
         data: {
           content: dto.content,
@@ -91,8 +91,6 @@ export class MemoryService {
 
       return created;
     });
-
-    return memory;
   }
 
   /**

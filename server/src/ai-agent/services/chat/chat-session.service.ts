@@ -4,6 +4,12 @@ import { LlmMessage } from '../../../llm/llm.types';
 import { paginate } from '../../../common/pagination';
 import { PrismaService } from '../../../prisma/prisma.service';
 
+/** Độ dài tối đa của tiêu đề phiên (cắt từ tin nhắn đầu tiên) */
+const SESSION_TITLE_MAX = 80;
+
+/** Số tin nhắn lịch sử gửi kèm cho model */
+const HISTORY_LIMIT = 20;
+
 /**
  * Phiên chat và tin nhắn (D19): chỉ bảng quan hệ, không bao giờ embedding / vector.
  */
@@ -11,19 +17,15 @@ import { PrismaService } from '../../../prisma/prisma.service';
 export class ChatSessionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Không có sessionId: tạo phiên mới. Có sessionId: phiên phải thuộc về user, nếu không thì 404 */
-  async resolve(
-    userId: string,
-    sessionId?: string,
-    characterId?: string | null,
-    firstMessage = '',
-  ) {
-    if (!sessionId) {
-      return this.prisma.chatSession.create({
-        data: { userId, characterId, title: firstMessage.slice(0, 80) },
-      });
-    }
+  /** Tạo phiên mới; tiêu đề lấy từ đầu tin nhắn đầu tiên */
+  create(userId: string, characterId: string | null, title: string) {
+    return this.prisma.chatSession.create({
+      data: { userId, characterId, title: title.slice(0, SESSION_TITLE_MAX) },
+    });
+  }
 
+  /** Phiên phải thuộc về user, nếu không thì 404 */
+  async findOwn(userId: string, sessionId: string) {
     const session = await this.prisma.chatSession.findFirst({
       where: { id: sessionId, userId },
     });
@@ -60,7 +62,7 @@ export class ChatSessionService {
   async recentHistory(
     sessionId: string,
     beforeMessageId: string,
-    limit = 20,
+    limit = HISTORY_LIMIT,
   ): Promise<LlmMessage[]> {
     const rows = await this.prisma.chatMessage.findMany({
       where: { sessionId },
@@ -112,7 +114,7 @@ export class ChatSessionService {
     page?: number,
     pageSize?: number,
   ) {
-    await this.resolve(userId, sessionId);
+    await this.findOwn(userId, sessionId);
 
     const where = { sessionId };
     return paginate(

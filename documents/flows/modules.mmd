@@ -91,7 +91,7 @@ flowchart LR
   AiAgentController --> TtsService
   AiAgentController -->|"list sessions, list messages, delete session"| ChatSessionService
   AgentService --> PendingActionStore
-  AgentService -->|"resolve session, store messages, history, link memory"| ChatSessionService
+  AgentService -->|"create or find session, store messages, history, link memory"| ChatSessionService
   AgentService -->|"pre-turn retrieval"| MemoryService
   AgentService --> GenAiProvider
   MemoryService -->|"embeddings"| GenAiProvider

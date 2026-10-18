@@ -20,7 +20,10 @@ interface NewMessages {
   historyId: string | null;
 }
 
-const decode = (data?: string | null) =>
+/** Truy vấn Gmail của fallback listRecent: email 1 ngày gần nhất */
+const RECENT_QUERY = 'newer_than:1d';
+
+const decode =(data?: string | null) =>
   data ? Buffer.from(data, 'base64url').toString('utf8') : undefined;
 
 function findPart(
@@ -227,7 +230,7 @@ export class GmailPushService implements OnApplicationBootstrap {
     do {
       const res = await gmail.users.messages.list({
         userId: 'me',
-        q: 'newer_than:1d',
+        q: RECENT_QUERY,
         labelIds: ['INBOX'],
         pageToken,
       });

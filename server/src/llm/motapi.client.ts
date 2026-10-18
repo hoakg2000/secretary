@@ -4,6 +4,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { sseData } from './sse';
 import { LlmBody, LlmEvent, LlmMessage, LlmToolCall } from './llm.types';
 
 const MOTAPI_URL = 'https://motapis.com/v1/chat/completions';
@@ -41,23 +42,21 @@ export class MotApiClient {
       number,
       { id: string; name: string; args: string }
     >();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    const logger = this.logger;
     let warned = false;
-    const parse = function* (line: string): Generator<LlmEvent> {
-      if (!line.startsWith('data:')) return;
-      const data = line.slice(5).trim();
-      if (!data || data === '[DONE]') return;
+
+    for await (const data of sseData(
+      response.body as unknown as AsyncIterable<Uint8Array>,
+    )) {
       let chunk: any;
       try {
         chunk = JSON.parse(data);
       } catch {
         // Dòng data không phải JSON: bỏ qua, không làm hỏng cả lượt
-        if (!warned) logger.warn('Bỏ qua dòng data không phải JSON từ MotAPI');
+        if (!warned) {
+          this.logger.warn('Bỏ qua dòng data không phải JSON từ MotAPI');
+        }
         warned = true;
-        return;
+        continue;
       }
       const delta = chunk.choices?.[0]?.delta;
       if (delta?.content) yield { type: 'text', text: delta.content };
@@ -76,25 +75,7 @@ export class MotApiClient {
           outputTokens: chunk.usage.completion_tokens ?? 0,
         };
       }
-    };
-
-    const isDone = (line: string) => line.replace(/^data:\s*/, '') === '[DONE]';
-    let done = false;
-    // [DONE] kết thúc luồng: không đọc tiếp dữ liệu nào sau đó
-    read: for await (const part of response.body as unknown as AsyncIterable<Uint8Array>) {
-      buffer += decoder.decode(part, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const raw of lines) {
-        const line = raw.trim();
-        if (isDone(line)) {
-          done = true;
-          break read;
-        }
-        yield* parse(line);
-      }
     }
-    if (!done) yield* parse(buffer.trim());
 
     if (pending.size > 0) {
       const calls: LlmToolCall[] = [...pending.entries()]

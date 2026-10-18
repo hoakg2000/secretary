@@ -79,11 +79,15 @@ export class EmailProcessor
     );
 
     if (result.category === 'TRANSACTION' && result.transaction) {
-      await this.createTransaction(emailLogId, result);
+      await this.createTransaction(
+        emailLogId,
+        result.transaction,
+        result.summary,
+      );
     } else if (result.category === 'EVENT' && result.event) {
       // shortcut: nếu bước ghi trạng thái ngay dưới đây lỗi, lượt retry tạo trùng sự kiện;
       // nâng khi cần chắc chắn -> thêm local_calendars.email_log_id unique như transactions
-      await this.createEvent(emailLogId, result);
+      await this.createEvent(emailLogId, result.event, result.summary);
     }
 
     await this.prisma.emailLog.update({
@@ -130,9 +134,10 @@ export class EmailProcessor
 
   private async createTransaction(
     emailLogId: string,
-    { transaction, summary }: EmailClassification,
+    transaction: NonNullable<EmailClassification['transaction']>,
+    summary: string,
   ) {
-    const { accountNumber, bankCode } = transaction!;
+    const { accountNumber, bankCode } = transaction;
 
     // Không đoán tài khoản: phải khớp đúng một tài khoản đang hoạt động, cùng loại tiền
     const accounts =
@@ -150,8 +155,8 @@ export class EmailProcessor
     const account = accounts.length === 1 ? accounts[0] : null;
     if (
       !account ||
-      (transaction!.currency &&
-        transaction!.currency.toUpperCase() !== account.currency.toUpperCase())
+      (transaction.currency &&
+        transaction.currency.toUpperCase() !== account.currency.toUpperCase())
     ) {
       this.logger.warn(
         `[Email ${emailLogId}] Không khớp được đúng một tài khoản cho giao dịch. Chỉ lưu tóm tắt.`,
@@ -163,11 +168,11 @@ export class EmailProcessor
       CreateTransactionDto,
       {
         accountId: account.id,
-        amount: transaction!.amount,
-        type: transaction!.direction,
-        counterparty: transaction!.counterparty ?? undefined,
+        amount: transaction.amount,
+        type: transaction.direction,
+        counterparty: transaction.counterparty ?? undefined,
         note: summary,
-        transactionTime: transaction!.time ?? new Date(),
+        transactionTime: transaction.time ?? new Date(),
         emailLogId,
       },
       emailLogId,
@@ -185,17 +190,18 @@ export class EmailProcessor
 
   private async createEvent(
     emailLogId: string,
-    { event, summary }: EmailClassification,
+    event: NonNullable<EmailClassification['event']>,
+    summary: string,
   ) {
-    const start = new Date(event!.start);
+    const start = new Date(event.start);
     const dto = await this.toValidDto(
       CreateEventDto,
       {
-        title: event!.title,
+        title: event.title,
         description: summary,
-        location: event!.location ?? undefined,
+        location: event.location ?? undefined,
         startTime: start,
-        endTime: event!.end ?? new Date(start.getTime() + ONE_HOUR_MS),
+        endTime: event.end ?? new Date(start.getTime() + ONE_HOUR_MS),
       },
       emailLogId,
     );

@@ -1,4 +1,5 @@
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
@@ -9,7 +10,8 @@ import { ResponseEnvelopeInterceptor } from './common/interceptors/response-enve
 export function configureApp(app: NestExpressApplication) {
   // Sau reverse proxy / tunnel: req.ip (ghi lúc đăng nhập, khóa của login throttle) phải là IP client thật.
   // Số = số proxy đứng trước server; giá trị khác = danh sách IP/subnet tin cậy ('loopback', '10.0.0.0/8')
-  const trustProxy = process.env.TRUST_PROXY;
+  const config = app.get(ConfigService);
+  const trustProxy = config.get<string>('TRUST_PROXY');
   if (trustProxy) {
     app.set(
       'trust proxy',
@@ -31,7 +33,7 @@ export function configureApp(app: NestExpressApplication) {
   app.useGlobalInterceptors(new ResponseEnvelopeInterceptor(new Reflector()));
 
   app.enableCors({
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    origin: config.getOrThrow<string>('CLIENT_URL'),
     credentials: true,
   });
 }

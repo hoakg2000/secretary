@@ -10,8 +10,9 @@ import {
 } from './dto/trigger-proactive.dto';
 import { TelegramClient, TelegramSendStatus } from './telegram.client';
 
-// SENT: Telegram nhận (HTTP 200). FAILED: gọi Telegram lỗi. NOT_CONFIGURED: thiếu bot token hoặc chat ID
-export type ProactiveDispatchStatus = TelegramSendStatus;
+// Cron chạy mỗi 10 phút; cửa sổ nhắc phải lớn hơn chu kỳ để không sót sự kiện nằm giữa hai lượt
+const CRON_INTERVAL_MINUTES = 10;
+const REMINDER_WINDOW_MINUTES = CRON_INTERVAL_MINUTES + 5;
 
 @Injectable()
 export class ProactiveService {
@@ -59,7 +60,7 @@ export class ProactiveService {
     channel: ProactiveChannel;
     metadata: Record<string, any>;
     timestamp: string;
-  }): Promise<{ status: ProactiveDispatchStatus; at: string }> {
+  }): Promise<{ status: TelegramSendStatus; at: string }> {
     const status = await this.telegramClient.sendMessage(payload.message);
     this.logger.log(
       `[${payload.channel}] ${status} Proactive message: "${payload.message}"`,
@@ -77,13 +78,15 @@ export class ProactiveService {
     this.logger.log('[Cron] Executing Fallback Proactive Check...');
 
     const now = new Date();
-    const fifteenMinutesLater = new Date(now.getTime() + 15 * 60 * 1000);
+    const windowEnd = new Date(
+      now.getTime() + REMINDER_WINDOW_MINUTES * 60 * 1000,
+    );
 
     const upcomingEvents = await this.prisma.localCalendar.findMany({
       where: {
         startTime: {
           gte: now,
-          lte: fifteenMinutesLater,
+          lte: windowEnd,
         },
         remindedAt: null,
         deletedAt: null,

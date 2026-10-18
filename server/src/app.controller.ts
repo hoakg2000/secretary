@@ -1,14 +1,14 @@
 import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service.js';
+import { ApiOperation } from '@nestjs/swagger';
 import { Public } from './common/decorators/public.decorator';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
-
+  // Public: để load balancer / monitor kiểm tra tiến trình còn sống, không đụng DB
   @Public()
   @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  @ApiOperation({ summary: 'Health check' })
+  health() {
+    return { status: 'ok' };
   }
 }

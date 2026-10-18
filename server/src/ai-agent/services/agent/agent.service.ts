@@ -24,7 +24,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatStreamDto } from '../../dto/chat-stream.dto';
 import { ChatSessionService } from '../chat/chat-session.service';
 import { MemoryService } from '../memory/memory.service';
-import defaultPrompt from '../../prompts/data.json';
+import defaultPrompt from '../../prompts/system-prompt.json';
 import { PendingActionStore } from './pending-action.store';
 import { ReplyStreamParser } from './reply-stream.parser';
 
@@ -53,6 +53,9 @@ export const CHAT_ERROR_MESSAGE = 'Đã xảy ra lỗi khi xử lý chat AI';
 /** Số vòng gọi tool tối đa cho một tin nhắn của người dùng */
 export const MAX_TOOL_ROUNDS = 5;
 
+/** Số ký ức liên quan nhất đưa vào system instruction */
+const PROMPT_MEMORY_LIMIT = 5;
+
 /** Schema câu trả lời của model: bản tiếng Việt hiển thị + bản tiếng Nhật để đọc TTS */
 export const REPLY_SCHEMA = {
   type: 'object',
@@ -72,6 +75,27 @@ const toPlain = (value: unknown) => JSON.parse(JSON.stringify(value ?? null));
 
 // Mỗi vòng là một câu trả lời trọn vẹn: tách đoạn để không dính câu (cả khi TTS đọc)
 const joinRounds = (a: string, b: string) => (a && b ? `${a}\n\n${b}` : a + b);
+
+/** Mô tả @AiTool() thành định nghĩa tool trung lập cho LLM */
+function toLlmTool(name: string, metadata: AiToolOptions): LlmTool {
+  const properties: Record<string, any> = {};
+  const required: string[] = [];
+
+  for (const [key, param] of Object.entries(metadata.parameters ?? {})) {
+    properties[key] = {
+      type: param.type,
+      description: param.description,
+      enum: param.enum,
+    };
+    if (param.required) required.push(key);
+  }
+
+  return {
+    name,
+    description: metadata.description,
+    parameters: { type: 'object', properties, required },
+  };
+}
 
 @Injectable()
 export class AgentService implements OnModuleInit {
@@ -114,38 +138,15 @@ export class AgentService implements OnModuleInit {
           method,
         );
 
-        if (metadata && metadata.name) {
-          const properties: Record<string, any> = {};
-          const required: string[] = [];
+        if (!metadata?.name) continue;
 
-          if (metadata.parameters) {
-            for (const [key, param] of Object.entries(metadata.parameters)) {
-              properties[key] = {
-                type: param.type,
-                description: param.description,
-                enum: param.enum,
-              };
-              if (param.required) {
-                required.push(key);
-              }
-            }
-          }
-
-          const definition: LlmTool = {
-            name: metadata.name,
-            description: metadata.description,
-            parameters: { type: 'object', properties, required },
-          };
-
-          this.toolsMap.set(metadata.name, {
-            definition,
-            options: metadata,
-            instance,
-            methodName,
-          });
-
-          this.logger.log(`[AgentService] Đã đăng ký AiTool: ${metadata.name}`);
-        }
+        this.toolsMap.set(metadata.name, {
+          definition: toLlmTool(metadata.name, metadata),
+          options: metadata,
+          instance,
+          methodName,
+        });
+        this.logger.log(`[AgentService] Đã đăng ký AiTool: ${metadata.name}`);
       }
     }
   }
@@ -194,7 +195,7 @@ export class AgentService implements OnModuleInit {
     try {
       const memories = await this.memoryService.searchMemory({
         query: dto.message,
-        limit: 5,
+        limit: PROMPT_MEMORY_LIMIT,
       });
       if (memories.length > 0) {
         sections.push(
@@ -224,7 +225,7 @@ export class AgentService implements OnModuleInit {
     dto: ChatStreamDto,
   ): Promise<Observable<{ data: string }>> {
     const existing = dto.sessionId
-      ? await this.chatSessions.resolve(userId, dto.sessionId)
+      ? await this.chatSessions.findOwn(userId, dto.sessionId)
       : null;
     // Phiên cũ dùng Character đã lưu, bỏ qua dto.characterId; phiên mới bắt buộc có Character hợp lệ
     if (!existing && !dto.characterId) {
@@ -242,10 +243,9 @@ export class AgentService implements OnModuleInit {
     }
     const session =
       existing ??
-      (await this.chatSessions.resolve(
+      (await this.chatSessions.create(
         userId,
-        undefined,
-        character?.id,
+        character?.id ?? null,
         dto.message,
       ));
 
@@ -308,51 +308,15 @@ export class AgentService implements OnModuleInit {
 
     // Vòng lặp ReAct / Tool Calling, có giới hạn số vòng
     for (let round = 0; ; round++) {
-      let calls: LlmToolCall[] = [];
-      let rawParts: unknown;
-      const parser = new ReplyStreamParser();
-      let raw = '';
-      let streamedVi = '';
+      const result = await this.streamRound(
+        { system, messages, tools },
+        emit,
+        isCancelled,
+      );
+      if (!result) return;
+      const { raw, streamedVi, calls, rawParts } = result;
 
-      for await (const ev of this.llm.sendMessageLLM(LLM_TYPE, {
-        system,
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-        jsonSchema: REPLY_SCHEMA,
-      })) {
-        if (isCancelled()) return;
-        if (ev.type === 'tool_calls') {
-          calls = ev.calls;
-          rawParts = ev.raw;
-        } else if (ev.type === 'text') {
-          raw += ev.text;
-          const vi = parser.feed(ev.text);
-          if (vi) {
-            streamedVi += vi;
-            emit({ type: 'text', content: vi });
-          }
-        }
-      }
-
-      if (raw) {
-        let reply: { message_vi?: unknown; message_jp?: unknown } | null = null;
-        try {
-          reply = JSON.parse(stripJsonFence(raw));
-        } catch (error: any) {
-          this.logger.warn(
-            `Câu trả lời của model không phải JSON hợp lệ: ${error.message}`,
-          );
-        }
-        // JSON hợp lệ nhưng thiếu message_vi: không hiển thị/lưu JSON thô (có lẫn tiếng Nhật)
-        const vi =
-          typeof reply?.message_vi === 'string'
-            ? reply.message_vi
-            : streamedVi || (reply ? '' : raw);
-        if (!reply && !streamedVi) emit({ type: 'text', content: raw });
-        turn.text = joinRounds(turn.text, vi);
-        if (typeof reply?.message_jp === 'string')
-          turn.textJp = joinRounds(turn.textJp, reply.message_jp);
-      }
+      if (raw) this.mergeReply(turn, raw, streamedVi, emit);
 
       if (calls.length === 0) break;
 
@@ -392,6 +356,74 @@ export class AgentService implements OnModuleInit {
       turn.textJp || undefined,
     );
     emit({ type: 'reply', messageId: saved.id, contentJp: saved.contentJp });
+  }
+
+  /**
+   * Một vòng gọi model: stream phần message_vi ra client, gom text thô và tool call.
+   * Trả null nếu client đã hủy giữa chừng.
+   */
+  private async streamRound(
+    request: { system: string; messages: LlmMessage[]; tools: LlmTool[] },
+    emit: Emit,
+    isCancelled: () => boolean,
+  ): Promise<{
+    raw: string;
+    streamedVi: string;
+    calls: LlmToolCall[];
+    rawParts: unknown;
+  } | null> {
+    let calls: LlmToolCall[] = [];
+    let rawParts: unknown;
+    const parser = new ReplyStreamParser();
+    let raw = '';
+    let streamedVi = '';
+
+    for await (const ev of this.llm.sendMessageLLM(LLM_TYPE, {
+      system: request.system,
+      messages: request.messages,
+      tools: request.tools.length > 0 ? request.tools : undefined,
+      jsonSchema: REPLY_SCHEMA,
+    })) {
+      if (isCancelled()) return null;
+      if (ev.type === 'tool_calls') {
+        calls = ev.calls;
+        rawParts = ev.raw;
+      } else if (ev.type === 'text') {
+        raw += ev.text;
+        const vi = parser.feed(ev.text);
+        if (vi) {
+          streamedVi += vi;
+          emit({ type: 'text', content: vi });
+        }
+      }
+    }
+    return { raw, streamedVi, calls, rawParts };
+  }
+
+  /** Gộp câu trả lời JSON của một vòng (message_vi / message_jp) vào lượt chat */
+  private mergeReply(
+    turn: ChatTurn,
+    raw: string,
+    streamedVi: string,
+    emit: Emit,
+  ) {
+    let reply: { message_vi?: unknown; message_jp?: unknown } | null = null;
+    try {
+      reply = JSON.parse(stripJsonFence(raw));
+    } catch (error: any) {
+      this.logger.warn(
+        `Câu trả lời của model không phải JSON hợp lệ: ${error.message}`,
+      );
+    }
+    // JSON hợp lệ nhưng thiếu message_vi: không hiển thị/lưu JSON thô (có lẫn tiếng Nhật)
+    const vi =
+      typeof reply?.message_vi === 'string'
+        ? reply.message_vi
+        : streamedVi || (reply ? '' : raw);
+    if (!reply && !streamedVi) emit({ type: 'text', content: raw });
+    turn.text = joinRounds(turn.text, vi);
+    if (typeof reply?.message_jp === 'string')
+      turn.textJp = joinRounds(turn.textJp, reply.message_jp);
   }
 
   /**

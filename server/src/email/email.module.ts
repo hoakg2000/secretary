@@ -1,6 +1,5 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
-import { AiAgentModule } from '../ai-agent/ai-agent.module';
 import { AuthModule } from '../auth/auth.module';
 import { CalendarModule } from '../calendar/calendar.module';
 import { FinanceModule } from '../finance/finance.module';
@@ -18,7 +17,6 @@ import { GmailPushService } from './gmail-push.service';
   imports: [
     PrismaModule,
     AuthModule,
-    AiAgentModule,
     FinanceModule,
     CalendarModule,
     ProactiveModule,
@@ -35,6 +33,5 @@ import { GmailPushService } from './gmail-push.service';
     GmailPushService,
     EmailTools,
   ],
-  exports: [EmailService, EmailRuleService],
 })
 export class EmailModule {}

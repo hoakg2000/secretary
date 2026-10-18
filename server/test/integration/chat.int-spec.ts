@@ -3,7 +3,7 @@ import { ChatRole } from '@prisma/client';
 import { CalendarService } from '../../src/calendar/calendar.service';
 import { lastValueFrom, toArray } from 'rxjs';
 import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
-import prompt from '../../src/ai-agent/prompts/data.json';
+import prompt from '../../src/ai-agent/prompts/system-prompt.json';
 import { ReplyStreamParser } from '../../src/ai-agent/services/agent/reply-stream.parser';
 import { AgentService, CHAT_ERROR_MESSAGE, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
 import { buildCharacterPrompt } from '../../src/character/character-prompt';
@@ -70,12 +70,12 @@ describe('chat integration', () => {
   // ---------------------------------------------------------------- ChatSessionService
 
   describe('ChatSessionService', () => {
-    describe('resolve', () => {
+    describe('create and findOwn', () => {
       it('creates a session for the user with the character and a title cut to 80 characters', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await seedCharacter(ctx.prisma);
 
-        const session = await sessions.resolve(user.id, undefined, character.id, 'x'.repeat(100));
+        const session = await sessions.create(user.id, character.id, 'x'.repeat(100));
 
         const saved = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
         expect(saved).toMatchObject({ userId: user.id, characterId: character.id, title: 'x'.repeat(80) });
@@ -85,7 +85,7 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
         const own = await makeSession(user.id);
 
-        const session = await sessions.resolve(user.id, own.id);
+        const session = await sessions.findOwn(user.id, own.id);
 
         expect(session.id).toBe(own.id);
         expect(await ctx.prisma.chatSession.count()).toBe(1);
@@ -96,13 +96,13 @@ describe('chat integration', () => {
         const other = await seedUser(ctx.prisma);
         const foreign = await makeSession(owner.id);
 
-        await expect(sessions.resolve(other.id, foreign.id)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(sessions.findOwn(other.id, foreign.id)).rejects.toBeInstanceOf(NotFoundException);
       });
 
       it('returns 404 for an unknown session', async () => {
         const user = await seedUser(ctx.prisma);
 
-        await expect(sessions.resolve(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(sessions.findOwn(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
       });
     });
 

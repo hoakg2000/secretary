@@ -6,7 +6,6 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AiAgentModule } from './ai-agent/ai-agent.module';
 import { AppController } from './app.controller.js';
-import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { CalendarModule } from './calendar/calendar.module';
@@ -52,7 +51,6 @@ import { ProactiveModule } from './proactive/proactive.module';
   ],
   controllers: [AppController],
   providers: [
-    AppService,
     // Mọi route đều yêu cầu JWT, trừ route gắn @Public()
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_FILTER, useClass: PrismaExceptionFilter },

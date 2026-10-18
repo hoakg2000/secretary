@@ -21,12 +21,5 @@ import { MemoryTools } from './tools/memory.tools';
     AgentService,
     TtsService,
   ],
-  exports: [
-    MemoryService,
-    MemoryTools,
-    RagChunkService,
-    AgentService,
-    TtsService,
-  ],
 })
 export class AiAgentModule {}

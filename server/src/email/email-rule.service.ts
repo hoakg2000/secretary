@@ -140,8 +140,11 @@ export class EmailRuleService {
         }
       }
 
-      default:
-        return false;
+      default: {
+        // Thêm EmailMatcher mới mà quên xử lý sẽ lỗi biên dịch ở đây
+        const unhandled: never = matcher;
+        return unhandled;
+      }
     }
   }
 }

@@ -10,6 +10,6 @@ import { CalendarTools } from './calendar.tools';
   imports: [PrismaModule, AuthModule],
   controllers: [CalendarController],
   providers: [CalendarService, CalendarSyncService, CalendarTools],
-  exports: [CalendarService, CalendarSyncService],
+  exports: [CalendarService],
 })
 export class CalendarModule {}

@@ -80,7 +80,7 @@ export class CalendarService {
 
     this.assertValidRange(startTime, endTime);
 
-    const event = await this.prisma.localCalendar.create({
+    return this.prisma.localCalendar.create({
       data: {
         title,
         description,
@@ -100,8 +100,6 @@ export class CalendarService {
         syncState: true,
       },
     });
-
-    return event;
   }
 
   /**
@@ -114,7 +112,7 @@ export class CalendarService {
     const year = queryDto.year ?? now.year;
     const month = queryDto.month ?? now.month;
 
-    const events = await this.prisma.localCalendar.findMany({
+    return this.prisma.localCalendar.findMany({
       where: {
         deletedAt: null,
         startTime: { lt: startOfMonth(year, month + 1, timeZone) },
@@ -127,8 +125,6 @@ export class CalendarService {
         syncState: true,
       },
     });
-
-    return events;
   }
 
   /**
@@ -160,7 +156,7 @@ export class CalendarService {
       updateEventDto.endTime ?? existing.endTime,
     );
 
-    const updatedEvent = await this.prisma.localCalendar.update({
+    return this.prisma.localCalendar.update({
       where: { id },
       data: {
         ...updateEventDto,
@@ -181,8 +177,6 @@ export class CalendarService {
         syncState: true,
       },
     });
-
-    return updatedEvent;
   }
 
   /**

@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -31,7 +32,7 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document);
   // -------------------------
 
-  const port = process.env.PORT || 3000;
+  const port = app.get(ConfigService).getOrThrow<number>('PORT');
   await app.listen(port);
   console.log(`Server is running on http://localhost:${port}`);
   console.log(`Swagger UI is available at http://localhost:${port}/api/docs`);

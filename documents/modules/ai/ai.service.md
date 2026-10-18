@@ -53,9 +53,9 @@ confirm it.
 
 #### Steps
 
-Before the stream opens: `ChatSessionService.resolve` loads the session of `dto.sessionId` (404 for an unknown or
+Before the stream opens: `ChatSessionService.findOwn` loads the session of `dto.sessionId` (404 for an unknown or
 foreign one; the model is not called). An existing session uses its stored `character_id` and ignores
-`dto.characterId`; when that is null (character deleted), no character block is added and only the default prompt from `prompts/data.json` applies. A new session needs
+`dto.characterId`; when that is null (character deleted), no character block is added and only the default prompt from `prompts/system-prompt.json` applies. A new session needs
 `dto.characterId`: missing → `BadRequestException`, unknown → `NotFoundException`; then the session is created with
 that character. The `character_id` of a session is never changed. These errors are thrown before the stream opens.
 Then, inside the stream:
@@ -64,7 +64,7 @@ Then, inside the stream:
 2. `ChatSessionService.appendMessage(sessionId, USER, dto.message)`: **the message sent by the user is stored in
    full**, before the model is called.
 3. Build the system instruction (`buildSystemInstruction`):
-   - the default prompt, `prompts/data.json` (`systemPrompt`), always first;
+   - the default prompt, `prompts/system-prompt.json` (`systemPrompt`), always first;
    - the character block from `buildCharacterPrompt` (`server/src/character/character-prompt.ts`): the heading `## Nhân vật bạn đang nhập vai`, then the name, the source (when set) and `characters.system_prompt`. It extends the default prompt and is omitted when `system_prompt` is blank or there is no character;
    - current time and `APP_TIMEZONE`;
    - the note that write tools are not run until the user confirms;
