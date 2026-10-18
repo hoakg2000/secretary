@@ -59,9 +59,9 @@
 
 - **Handler**: `handleGoogleCallback(code, state, res)` → `AuthService.handleGoogleCallback`
 - **Auth**: `@Public()` (Google redirects the browser here; the signed `state` is the proof).
-- **Query**: `code`, `state` (both required).
+- **Query**: `code`, `state`; optional `error` (Google sends `access_denied` when the user declines consent).
 - **Response**: never JSON. Always a 302 to `CLIENT_URL/settings`: `?google=connected` after the tokens are stored
-  encrypted, else `?google=error&reason=<reason>` with `missing_code`, `invalid_state`, `no_token` (Google returned
+  encrypted, else `?google=error&reason=<reason>` with `missing_code`, `invalid_state`, `access_denied` (the user declined consent), `no_token` (Google returned
   no access token) or `exchange_failed` (any other failure, such as a rejected code).
 
 ### 7. Google status — `GET /api/v1/auth/google/status`

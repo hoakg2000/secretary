@@ -263,9 +263,9 @@ export class AuthService {
   async getGoogleStatus(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { googleRefreshToken: true },
+      select: { googleAccessToken: true },
     });
-    return { connected: !!user?.googleRefreshToken };
+    return { connected: !!user?.googleAccessToken };
   }
 
   disconnectGoogle(userId: string) {

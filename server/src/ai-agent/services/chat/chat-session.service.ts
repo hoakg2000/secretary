@@ -4,8 +4,11 @@ import { LlmMessage } from '../../../llm/llm.types';
 import { paginate } from '../../../common/pagination';
 import { PrismaService } from '../../../prisma/prisma.service';
 
-/** Độ dài tối đa của tiêu đề phiên (cắt từ tin nhắn đầu tiên) */
+/** Độ dài tối đa của tiêu đề phiên suy ra từ tin nhắn đầu tiên (tiêu đề do user đặt giữ nguyên) */
 const SESSION_TITLE_MAX = 80;
+
+export const titleFromMessage = (message: string) =>
+  message.trim().slice(0, SESSION_TITLE_MAX) || null;
 
 /** Số tin nhắn lịch sử gửi kèm cho model */
 const HISTORY_LIMIT = 20;
@@ -17,13 +20,13 @@ const HISTORY_LIMIT = 20;
 export class ChatSessionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Tạo phiên mới; tiêu đề lấy từ đầu tin nhắn đầu tiên (null: đặt khi có tin nhắn đầu) */
+  /** Tạo phiên mới; title null thì đặt khi có tin nhắn đầu (xem titleFromMessage) */
   create(userId: string, characterId: string | null, title: string | null) {
     return this.prisma.chatSession.create({
       data: {
         userId,
         characterId,
-        title: title?.slice(0, SESSION_TITLE_MAX) ?? null,
+        title,
       },
     });
   }
@@ -47,18 +50,23 @@ export class ChatSessionService {
 
   /** Đổi tiêu đề phiên của user; 404 nếu không có hoặc của người khác */
   async rename(userId: string, sessionId: string, title: string) {
-    await this.findOwn(userId, sessionId);
-    return this.prisma.chatSession.update({
-      where: { id: sessionId },
+    const renamed = await this.prisma.chatSession.updateMany({
+      where: { id: sessionId, userId },
       data: { title },
     });
+    if (renamed.count === 0) {
+      throw new NotFoundException(
+        `Không tìm thấy phiên chat với ID: ${sessionId}`,
+      );
+    }
+    return this.findOwn(userId, sessionId);
   }
 
   /** Phiên chưa có tiêu đề lấy tiêu đề từ tin nhắn đầu tiên (không ghi đè tiêu đề đã có) */
   setTitleIfEmpty(sessionId: string, message: string) {
     return this.prisma.chatSession.updateMany({
       where: { id: sessionId, title: null },
-      data: { title: message.slice(0, SESSION_TITLE_MAX) },
+      data: { title: titleFromMessage(message) },
     });
   }
 

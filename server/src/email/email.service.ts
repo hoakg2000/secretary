@@ -127,6 +127,7 @@ export class EmailService {
   }
 
   /** Một email log đầy đủ (kèm rawBody); 404 nếu không có */
+  // shortcut: EmailLog has no userId, so any authenticated user reads any log; scope by user when multi-user, needs a schema change.
   async findLog(id: string) {
     const emailLog = await this.prisma.emailLog.findUnique({ where: { id } });
     if (!emailLog) {

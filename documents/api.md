@@ -20,7 +20,7 @@ and response shapes; this file lists what exists and who may call it.
 | POST | `/auth/logout` | JWT | Ends the current session, or `{ sessionId }` to end another session of the same user. |
 | GET | `/auth/session` | JWT | Current session and user. |
 | GET | `/auth/google/connect` | JWT | Returns `{ url }`: the Google consent URL carrying a signed `state` (valid 10 minutes). |
-| GET | `/auth/google/callback` | Public | `code` + `state`. Stores the Google tokens encrypted. Always answers 302 to `CLIENT_URL/settings?google=connected`, or on failure to `CLIENT_URL/settings?google=error&reason=` `missing_code`, `invalid_state` (invalid, expired or wrong-type `state`), `no_token` (Google returned no access token) or `exchange_failed`. |
+| GET | `/auth/google/callback` | Public | `code` + `state`. Stores the Google tokens encrypted. Always answers 302 to `CLIENT_URL/settings?google=connected`, or on failure to `CLIENT_URL/settings?google=error&reason=` `missing_code`, `invalid_state` (invalid, expired or wrong-type `state`), `access_denied` (the user declined consent), `no_token` (Google returned no access token) or `exchange_failed`. |
 | GET | `/auth/google/status` | JWT | `{ connected }`: whether a Google refresh token is stored. |
 | DELETE | `/auth/google` | JWT | Disconnect: revokes the token at Google (best effort), clears the stored tokens and `gmailHistoryId`. `data: null`. |
 
@@ -95,7 +95,7 @@ Local is the source of truth; changes are pushed one way to Google.
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | POST | `/ai-agent/chat/stream` | JWT | SSE over POST. Body `{ message, sessionId?, characterId? }`. No `sessionId` → a session is created and `characterId` is required: missing → 400, unknown → 404. A `sessionId` that is unknown or belongs to another user → 404. All errors come before the stream opens, with no model call. With a `sessionId` the session's stored character is used and `characterId` is ignored (a deleted character → generic prompt). Storage: `db.md` section 5. The answer is a bilingual JSON reply; `text` frames carry the Vietnamese text and a `reply` frame carries the message ID and the Japanese text. Frames: `modules/ai/ai.controller.md`. |
-| POST | `/ai-agent/sessions` | JWT | Create an empty session `{ characterId, title? }` (`title` max 120). 404 for an unknown character. Without a `title`, the first `chat/stream` message with this `sessionId` sets it (first 80 characters). |
+| POST | `/ai-agent/sessions` | JWT | Create an empty session `{ characterId, title? }` (`title` 1-120 characters, trimmed, stored as given). 404 for an unknown character. Without a `title`, the first `chat/stream` message with this `sessionId` sets it (first 80 characters). |
 | PATCH | `/ai-agent/sessions/:id` | JWT | Rename `{ title }` (1-120 characters). 404 for an unknown or foreign session. |
 | GET | `/ai-agent/sessions?page=&pageSize=` | JWT | Own sessions, newest `lastMessageAt` first (`pageSize` max 50). Each item has `character`: `{ id, name, voiceId }`, or `null` when the character was deleted. |
 | GET | `/ai-agent/sessions/:id/messages?page=&pageSize=` | JWT | Messages of an own session, oldest first (full rows: `id`, `sessionId`, `role` (`USER` / `MODEL`), `content`, `contentJp`, `toolCalls`, `memoryId`, `createdAt`). 404 for an unknown or foreign session. |

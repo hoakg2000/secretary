@@ -198,10 +198,16 @@ export class AuthController {
     required: true,
     description: 'State do server ký khi tạo URL kết nối',
   })
+  @ApiQuery({
+    name: 'error',
+    type: String,
+    required: false,
+    description: 'Mã lỗi Google (vd. access_denied khi từ chối ở màn hình đồng ý)',
+  })
   @ApiResponse({
     status: 302,
     description:
-      'Chuyển hướng về `${CLIENT_URL}/settings?google=connected`, hoặc `?google=error&reason=<missing_code|invalid_state|no_token|exchange_failed>` khi lỗi',
+      'Chuyển hướng về `${CLIENT_URL}/settings?google=connected`, hoặc `?google=error&reason=<missing_code|invalid_state|no_token|exchange_failed|access_denied>` khi lỗi',
   })
   // Google redirect trình duyệt về đây, không có Bearer token: xác thực bằng state đã ký
   @Public()
@@ -209,9 +215,14 @@ export class AuthController {
   async handleGoogleCallback(
     @Query('code') code: string,
     @Query('state') state: string,
+    @Query('error') oauthError: string | undefined,
     @Res() res: Response,
   ) {
     const settingsUrl = `${this.configService.getOrThrow<string>('CLIENT_URL')}/settings`;
+    // Người dùng từ chối ở màn hình đồng ý: Google gửi ?error=access_denied, không có code
+    if (oauthError) {
+      return res.redirect(302, `${settingsUrl}?google=error&reason=access_denied`);
+    }
     try {
       await this.authService.handleGoogleCallback(code, state);
       return res.redirect(302, `${settingsUrl}?google=connected`);
@@ -232,7 +243,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Trạng thái kết nối tài khoản Google' })
   @ApiResponse({
     status: 200,
-    description: 'Trả về `{ connected }`: true khi đã có Refresh Token',
+    description: 'Trả về `{ connected }`: true khi đã có Access Token',
   })
   @ApiResponse({ status: 401, description: 'Chưa xác thực' })
   @Get('google/status')

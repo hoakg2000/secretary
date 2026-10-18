@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { AuthController } from '../../src/auth/auth.controller';
@@ -515,13 +515,15 @@ describe('auth integration', () => {
   });
 
   describe('Google status and disconnect', () => {
-    it('reports connected only when a refresh token is stored', async () => {
+    it('reports connected when an access token is stored, the same rule as the client factory', async () => {
       const connected = await seedGoogleUser(ctx.prisma, factory);
       const accessOnly = await seedUser(ctx.prisma, { googleAccessToken: 'v1:x' });
+      const refreshOnly = await seedUser(ctx.prisma, { googleRefreshToken: 'v1:x' });
       const none = await seedUser(ctx.prisma);
 
       expect(await auth.getGoogleStatus(connected.id)).toEqual({ connected: true });
-      expect(await auth.getGoogleStatus(accessOnly.id)).toEqual({ connected: false });
+      expect(await auth.getGoogleStatus(accessOnly.id)).toEqual({ connected: true });
+      expect(await auth.getGoogleStatus(refreshOnly.id)).toEqual({ connected: false });
       expect(await auth.getGoogleStatus(none.id)).toEqual({ connected: false });
     });
 
@@ -555,6 +557,33 @@ describe('auth integration', () => {
       expect(row.googleRefreshToken).toBeNull();
     });
 
+    it('never logs the token when the revoke fails', async () => {
+      const user = await seedGoogleUser(ctx.prisma, factory, { refresh_token: 'SECRET-REFRESH' });
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      ctx.google.revokeToken.mockRejectedValue(
+        Object.assign(new Error('request to https://oauth2.googleapis.com/revoke?token=SECRET-REFRESH failed'), {
+          code: 'ECONNRESET',
+          response: { status: 400 },
+        }),
+      );
+
+      await auth.disconnectGoogle(user.id);
+
+      expect(warn).toHaveBeenCalled();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET-REFRESH');
+      expect(JSON.stringify(warn.mock.calls)).toContain('400');
+    });
+
+    it('does not revive a disconnected user when a late refreshed token is saved', async () => {
+      const user = await seedGoogleUser(ctx.prisma, factory);
+      ctx.google.revokeToken.mockResolvedValue({});
+      await auth.disconnectGoogle(user.id);
+
+      await factory.saveTokens(user.id, { access_token: 'late' }, true);
+
+      expect((await ctx.prisma.user.findUniqueOrThrow({ where: { id: user.id } })).googleAccessToken).toBeNull();
+    });
+
     it('skips the revoke for a user that is not connected', async () => {
       const user = await seedUser(ctx.prisma);
 
@@ -576,9 +605,9 @@ describe('auth integration', () => {
 
   describe('AuthController google callback redirect', () => {
     let controller: AuthController;
-    const redirectOf = async (code?: string, state?: string) => {
+    const redirectOf = async (code?: string, state?: string, error?: string) => {
       const res = { redirect: vi.fn() };
-      await controller.handleGoogleCallback(code as string, state as string, res as any);
+      await controller.handleGoogleCallback(code as string, state as string, error, res as any);
       expect(res.redirect).toHaveBeenCalledTimes(1);
       return res.redirect.mock.calls[0] as [number, string];
     };
@@ -598,6 +627,10 @@ describe('auth integration', () => {
 
     it('redirects with reason missing_code', async () => {
       expect(await redirectOf(undefined, 'state')).toEqual([302, 'http://localhost:3001/settings?google=error&reason=missing_code']);
+    });
+
+    it('redirects with reason access_denied when the user declines consent', async () => {
+      expect(await redirectOf(undefined, 'state', 'access_denied')).toEqual([302, 'http://localhost:3001/settings?google=error&reason=access_denied']);
     });
 
     it('redirects with reason invalid_state', async () => {

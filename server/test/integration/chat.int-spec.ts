@@ -1,5 +1,7 @@
 import { BadRequestException, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ChatRole } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { CalendarService } from '../../src/calendar/calendar.service';
 import { lastValueFrom, toArray } from 'rxjs';
 import { ChatStreamDto } from '../../src/ai-agent/dto/chat-stream.dto';
@@ -7,6 +9,8 @@ import prompt from '../../src/ai-agent/prompts/system-prompt.json';
 import { ReplyStreamParser } from '../../src/ai-agent/services/agent/reply-stream.parser';
 import { AgentService, CHAT_ERROR_MESSAGE, DEFAULT_MEMORY_RULE, REPLY_SCHEMA } from '../../src/ai-agent/services/agent/agent.service';
 import { buildCharacterPrompt } from '../../src/character/character-prompt';
+import { CreateSessionDto } from '../../src/ai-agent/dto/create-session.dto';
+import { RenameSessionDto } from '../../src/ai-agent/dto/rename-session.dto';
 import { ChatSessionService } from '../../src/ai-agent/services/chat/chat-session.service';
 import { LLM_MODELS, LLM_TYPE } from '../../src/llm/llm.service';
 import type { LlmMessage } from '../../src/llm/llm.types';
@@ -71,14 +75,23 @@ describe('chat integration', () => {
 
   describe('ChatSessionService', () => {
     describe('create and findOwn', () => {
-      it('creates a session for the user with the character and a title cut to 80 characters', async () => {
+      it('creates a session for the user with the character and an explicit title stored unchanged', async () => {
         const user = await seedUser(ctx.prisma);
         const character = await seedCharacter(ctx.prisma);
 
         const session = await sessions.create(user.id, character.id, 'x'.repeat(100));
 
         const saved = await ctx.prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } });
-        expect(saved).toMatchObject({ userId: user.id, characterId: character.id, title: 'x'.repeat(80) });
+        expect(saved).toMatchObject({ userId: user.id, characterId: character.id, title: 'x'.repeat(100) });
+      });
+
+      it('derives the title from the first message: trimmed and cut to 80 characters', async () => {
+        const user = await seedUser(ctx.prisma);
+        const own = await makeSession(user.id);
+
+        await sessions.setTitleIfEmpty(own.id, `  ${'y'.repeat(100)}  `);
+
+        expect((await sessions.findOwn(user.id, own.id)).title).toBe('y'.repeat(80));
       });
 
       it('returns the user own session', async () => {
@@ -103,6 +116,28 @@ describe('chat integration', () => {
         const user = await seedUser(ctx.prisma);
 
         await expect(sessions.findOwn(user.id, MISSING)).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    describe('session DTO validation (ValidationPipe, checked with class-validator)', () => {
+      const CHARACTER_ID = '11111111-1111-4111-8111-111111111111';
+      const createDto = (plain: object) => plainToInstance(CreateSessionDto, { characterId: CHARACTER_ID, ...plain });
+      const renameDto = (title: unknown) => plainToInstance(RenameSessionDto, { title });
+
+      it('accepts a missing title and a 120-character title', async () => {
+        expect(await validate(createDto({}))).toHaveLength(0);
+        expect(await validate(createDto({ title: 'a'.repeat(120) }))).toHaveLength(0);
+        expect(await validate(renameDto('a'.repeat(120)))).toHaveLength(0);
+      });
+
+      it.each(['', '   ', 'a'.repeat(121)])('rejects the title %j', async (title) => {
+        expect((await validate(createDto({ title }))).map((e) => e.property)).toEqual(['title']);
+        expect((await validate(renameDto(title))).map((e) => e.property)).toEqual(['title']);
+      });
+
+      it('trims the title and rejects a non-uuid characterId', async () => {
+        expect(createDto({ title: '  Trip  ' }).title).toBe('Trip');
+        expect((await validate(createDto({ characterId: 'nope' }))).map((e) => e.property)).toEqual(['characterId']);
       });
     });
 

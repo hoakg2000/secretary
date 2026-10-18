@@ -22,7 +22,7 @@ import { LLM_TYPE, LlmService, stripJsonFence } from '../../../llm/llm.service';
 import { LlmMessage, LlmTool, LlmToolCall } from '../../../llm/llm.types';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ChatStreamDto } from '../../dto/chat-stream.dto';
-import { ChatSessionService } from '../chat/chat-session.service';
+import { ChatSessionService, titleFromMessage } from '../chat/chat-session.service';
 import { MemoryService } from '../memory/memory.service';
 import defaultPrompt from '../../prompts/system-prompt.json';
 import { PendingActionStore } from './pending-action.store';
@@ -249,7 +249,7 @@ export class AgentService implements OnModuleInit {
       (await this.chatSessions.create(
         userId,
         character?.id ?? null,
-        dto.message,
+        titleFromMessage(dto.message),
       ));
 
     return new Observable((subscriber) => {

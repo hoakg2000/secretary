@@ -1,4 +1,4 @@
-import { plainToInstance } from 'class-transformer';
+import { Transform, plainToInstance } from 'class-transformer';
 import {
   IsBase64,
   IsInt,
@@ -6,6 +6,7 @@ import {
   IsNotIn,
   IsOptional,
   IsString,
+  IsUrl,
   Length,
   MinLength,
   ValidateIf,
@@ -46,7 +47,11 @@ export class EnvironmentVariables {
   @IsString()
   JWT_REFRESH_EXPIRES_IN: string = '7d';
 
-  @IsString()
+  // Bỏ dấu / cuối: origin CORS không có nó và redirect nối thêm '/settings'
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.replace(/\/+$/, '') : value,
+  )
+  @IsUrl({ require_tld: false })
   CLIENT_URL: string = 'http://localhost:3001';
 
   // ---- Optional, feature-gated ----

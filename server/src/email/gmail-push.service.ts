@@ -9,7 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { CronExpression, SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 import { gmail_v1, google } from 'googleapis';
-import { GoogleClientFactory } from '../auth/google-client.factory';
+import { CONNECTED, GoogleClientFactory } from '../auth/google-client.factory';
 import { isGone } from '../common/google/google-errors';
 import { runExclusive } from '../common/run-exclusive';
 import { PrismaService } from '../prisma/prisma.service';
@@ -97,8 +97,8 @@ export class GmailPushService implements OnApplicationBootstrap {
         requestBody: { topicName, labelIds: ['INBOX'] },
       });
       if (!user.gmailHistoryId && res.data.historyId) {
-        await this.prisma.user.update({
-          where: { id: user.id },
+        await this.prisma.user.updateMany({
+          where: { id: user.id, ...CONNECTED },
           data: { gmailHistoryId: res.data.historyId },
         });
       }
@@ -173,8 +173,9 @@ export class GmailPushService implements OnApplicationBootstrap {
 
         // Chỉ lưu sau khi cả lượt thành công
         if (historyId) {
-          await this.prisma.user.update({
-            where: { id: user.id },
+          // Điều kiện còn kết nối: không ghi lại sau khi user vừa ngắt kết nối
+          await this.prisma.user.updateMany({
+            where: { id: user.id, ...CONNECTED },
             data: { gmailHistoryId: historyId },
           });
         }

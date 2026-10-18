@@ -10,6 +10,9 @@ interface GoogleTokens {
   expiry_date?: number | null;
 }
 
+/** Một nghĩa của "đã kết nối Google": còn access token */
+export const CONNECTED = { googleAccessToken: { not: null } } as const;
+
 @Injectable()
 export class GoogleClientFactory {
   private readonly logger = new Logger(GoogleClientFactory.name);
@@ -32,9 +35,10 @@ export class GoogleClientFactory {
   }
 
   /** Lưu Google tokens (đã mã hóa AES-256-GCM) vào bảng users */
-  async saveTokens(userId: string, tokens: GoogleTokens) {
-    await this.prisma.user.update({
-      where: { id: userId },
+  async saveTokens(userId: string, tokens: GoogleTokens, onlyIfConnected = false) {
+    // updateMany + điều kiện: ghi muộn của token làm mới không hồi sinh kết nối vừa bị ngắt
+    await this.prisma.user.updateMany({
+      where: { id: userId, ...(onlyIfConnected && CONNECTED) },
       data: {
         ...(tokens.access_token && {
           googleAccessToken: encryptToken(tokens.access_token, this.key),
@@ -69,7 +73,7 @@ export class GoogleClientFactory {
     });
 
     client.on('tokens', (tokens) => {
-      this.saveTokens(userId, tokens).catch((error) =>
+      this.saveTokens(userId, tokens, true).catch((error) =>
         this.logger.error('Không lưu được Google token đã làm mới', error),
       );
     });
@@ -89,8 +93,11 @@ export class GoogleClientFactory {
         await this.createOAuthClient().revokeToken(
           decryptToken(stored, this.key),
         );
-      } catch (error) {
-        this.logger.warn(`Không thu hồi được token tại Google: ${error}`);
+      } catch (error: any) {
+        // URL thu hồi chứa token: không ghi message của lỗi
+        this.logger.warn(
+          `Không thu hồi được token tại Google (status=${error?.response?.status}, code=${error?.code})`,
+        );
       }
     }
     await this.prisma.user.update({
@@ -107,7 +114,7 @@ export class GoogleClientFactory {
   /** User đầu tiên đã kết nối Google cùng OAuth2 client của họ; null nếu chưa ai kết nối */
   async forConnectedUser() {
     const user = await this.prisma.user.findFirst({
-      where: { googleAccessToken: { not: null } },
+      where: CONNECTED,
       select: { id: true, gmailHistoryId: true },
     });
     const auth = user && (await this.forUser(user.id));
